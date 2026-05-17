@@ -127,7 +127,10 @@ export interface SegmentsFile {
   schema_version?: number;
   segments: Segment[];
   stimulus_list?: string[];
+  /** Python and the spec both call this `label_anchors`; older docs used
+   * `anchors`. We accept both on input and write `label_anchors` on save. */
   anchors?: LabelAnchor[];
+  label_anchors?: LabelAnchor[];
   source_files?: Array<{ path: string; offset_sec: number; duration_sec: number }>;
   _source?: "reviewed" | "proposed";
   [extra: string]: unknown;
