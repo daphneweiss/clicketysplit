@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "_doc": "Shared Python/TS test vectors for the auto_label forward-walk algorithm. See _design/03_AUDIO_AND_DETECTION.md.",
+  "vectors": [
+    {
+      "name": "blocked-k3-phase1",
+      "_note": "03 doc worked example phase 1: only the implicit anchor at index 0.",
+      "presentation_order": "blocked",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 9,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"}
+      ],
+      "expected_labels": [
+        "apple", "apple", "apple",
+        "banana", "banana", "banana",
+        "cherry", "cherry", "cherry"
+      ]
+    },
+    {
+      "name": "blocked-k3-phase2-user-edit",
+      "_note": "03 doc worked example phase 2: user re-anchors index 4 to cherry; the trailing region wraps back to apple after K=3 cherries.",
+      "presentation_order": "blocked",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 9,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"},
+        {"word_index": 4, "label": "cherry", "source": "user"}
+      ],
+      "expected_labels": [
+        "apple", "apple", "apple", "apple",
+        "cherry", "cherry", "cherry",
+        "apple", "apple"
+      ]
+    },
+    {
+      "name": "blocked-k3-phase3-empty-anchor",
+      "_note": "03 doc worked example phase 3: an empty-label anchor halts forward labeling.",
+      "presentation_order": "blocked",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 9,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"},
+        {"word_index": 4, "label": "cherry", "source": "user"},
+        {"word_index": 7, "label": "", "source": "user"}
+      ],
+      "expected_labels": [
+        "apple", "apple", "apple", "apple",
+        "cherry", "cherry", "cherry",
+        "", ""
+      ]
+    },
+    {
+      "name": "cycled-phase1",
+      "_note": "03 doc worked example for cycled with just the implicit anchor.",
+      "presentation_order": "cycled",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 8,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"}
+      ],
+      "expected_labels": [
+        "apple", "banana", "cherry",
+        "apple", "banana", "cherry",
+        "apple", "banana"
+      ]
+    },
+    {
+      "name": "cycled-phase2-user-edit",
+      "_note": "03 doc worked example for cycled after the user re-anchors index 1 to cherry.",
+      "presentation_order": "cycled",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 8,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"},
+        {"word_index": 1, "label": "cherry", "source": "user"}
+      ],
+      "expected_labels": [
+        "apple", "cherry", "apple", "banana",
+        "cherry", "apple", "banana", "cherry"
+      ]
+    },
+    {
+      "name": "random-no-auto-label",
+      "_note": "presentation_order=random does not auto-fill non-anchored indices.",
+      "presentation_order": "random",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 5,
+      "anchors": [
+        {"word_index": 2, "label": "cherry", "source": "user"}
+      ],
+      "expected_labels": ["", "", "cherry", "", ""]
+    },
+    {
+      "name": "blocked-wraparound",
+      "_note": "Speaker did an extra rep past the end of the stimulus list; blocked walk wraps back to stimulus_list[0] (per 03 doc Notes on the algorithm).",
+      "presentation_order": "blocked",
+      "expected_reps_per_stimulus": 3,
+      "stimulus_list": ["apple", "banana", "cherry"],
+      "word_segment_count": 11,
+      "anchors": [
+        {"word_index": 0, "label": "apple", "source": "initial"}
+      ],
+      "expected_labels": [
+        "apple", "apple", "apple",
+        "banana", "banana", "banana",
+        "cherry", "cherry", "cherry",
+        "apple", "apple"
+      ]
+    }
+  ]
+}
