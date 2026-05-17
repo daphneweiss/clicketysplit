@@ -420,6 +420,7 @@ def test_write_tokens_csv_header_and_rows(tmp_path: Path) -> None:
     assert rows[1][10] == "wav"
 
 
+@pytest.mark.needs_praat
 @pytest.mark.skipif(not HAS_PARSELMOUTH, reason="praat-parselmouth not installed")
 def test_write_textgrid_three_tiers(tmp_path: Path) -> None:
     import parselmouth

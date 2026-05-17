@@ -77,3 +77,10 @@ target-version = "py310"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "needs_silero: requires silero-vad",
+    "needs_webrtc: requires webrtcvad",
+    "needs_ffmpeg: requires ffmpeg on PATH",
+    "needs_praat: requires praat-parselmouth",
+    "slow: takes >1s",
+]

@@ -148,6 +148,7 @@ def test_energy_detect_silent_input_returns_no_segments() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.needs_webrtc
 @pytest.mark.skipif(
     not WebRTCDetector.is_available(),
     reason="webrtcvad not installed (pip install 'clicketysplit[webrtc]')",
@@ -172,6 +173,7 @@ def test_webrtc_detect_runs_on_two_bursts() -> None:
     assert len(result.analysis["times"]) == len(times_ref)
 
 
+@pytest.mark.needs_webrtc
 @pytest.mark.skipif(
     not WebRTCDetector.is_available(),
     reason="webrtcvad not installed (pip install 'clicketysplit[webrtc]')",
@@ -196,6 +198,7 @@ def test_webrtc_rejects_bad_frame_ms() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.needs_silero
 @pytest.mark.skipif(
     not SileroDetector.is_available(),
     reason="silero-vad not installed (pip install 'clicketysplit[silero]')",
@@ -216,6 +219,7 @@ def test_silero_detect_runs_returns_result() -> None:
     assert len(result.analysis["times"]) == len(times_ref)
 
 
+@pytest.mark.needs_silero
 @pytest.mark.skipif(
     not SileroDetector.is_available(),
     reason="silero-vad not installed (pip install 'clicketysplit[silero]')",
