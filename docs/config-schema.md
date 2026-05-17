@@ -1,0 +1,3 @@
+# Config schema
+
+Coming soon.

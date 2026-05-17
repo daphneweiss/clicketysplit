@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clicketysplit"
+dynamic = ["version"]
+description = "A browser-based tool for segmenting and exporting word tokens from speech recordings."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Daphne Weiss", email = "daphnerweiss@gmail.com" }]
+keywords = ["audio", "segmentation", "phonetics", "speech", "psycholinguistics"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Analysis",
+  "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+  "flask>=3.0",
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "soundfile>=0.12",       # WAV/FLAC/OGG read+write
+  "pydantic>=2.5",         # config schema validation
+  "matplotlib>=3.7",       # overview plot for sanity-checks
+]
+
+[project.optional-dependencies]
+silero  = ["silero-vad>=5.0", "onnxruntime>=1.16"]
+webrtc  = ["webrtcvad>=2.0.10"]
+denoise = ["noisereduce>=3.0"]
+mp3     = ["pydub>=0.25"]           # also requires ffmpeg on PATH (system)
+praat   = ["praat-parselmouth>=0.4"]
+all = [
+  "clicketysplit[silero,webrtc,denoise,mp3,praat]",
+]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov",
+  "ruff",
+  "mypy",
+  "mkdocs>=1.5",
+  "mkdocs-material>=9.5",
+]
+
+[project.scripts]
+clicketysplit = "clicketysplit.cli:main"
+
+[project.urls]
+Homepage      = "https://github.com/daphneweiss/clicketysplit"
+Documentation = "https://daphneweiss.github.io/clicketysplit"
+Issues        = "https://github.com/daphneweiss/clicketysplit/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/clicketysplit/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clicketysplit"]
+# Include the pre-built frontend in the wheel
+include = ["src/clicketysplit/server/static/**", "src/clicketysplit/demo_assets/**"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

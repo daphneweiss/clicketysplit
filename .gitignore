@@ -64,3 +64,9 @@ Thumbs.db
 # --- User-generated runtime data (developers might create test experiments locally) ---
 *.session.json
 *.session.autosave.json
+
+# --- Internal scaffolding, not part of the published artifact ---
+# Design docs and the legacy-code reference copy live here for subagents to read,
+# but never ship in the wheel or appear in git history. See _design/CONTRACT_NOTES.md C9.
+_design/
+_reference/

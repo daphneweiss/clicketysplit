@@ -1,0 +1,15 @@
+site_name: clicketysplit
+repo_url: https://github.com/daphneweiss/clicketysplit
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Quickstart: quickstart.md
+  - Config schema: config-schema.md
+  - Detection: detection.md
+  - Exports: exports.md
+  - Troubleshooting: troubleshooting.md
+  - Contributing: contributing.md
