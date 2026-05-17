@@ -1,6 +1,3 @@
-# --- design / internal scaffolding (not part of the published artifact) ---
-_design/
-
 # --- Python ---
 __pycache__/
 *.py[cod]
