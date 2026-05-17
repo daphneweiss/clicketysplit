@@ -70,7 +70,23 @@ jobs:
           npm ci
           npm run build
 
-      - name: Verify bundled static index.html exists
+      - name: Verify bundled static index.html exists on disk
         run: |
           test -f src/clicketysplit/server/static/index.html \
             || (echo "frontend build did not emit index.html" && exit 1)
+
+      - name: Build wheel
+        run: |
+          pip install build
+          python -m build --wheel
+
+      - name: Verify static assets are bundled into the wheel
+        run: |
+          WHEEL=$(ls dist/clicketysplit-*.whl | head -1)
+          echo "Inspecting $WHEEL"
+          python -m zipfile -l "$WHEEL" | grep -q "clicketysplit/server/static/index.html" \
+            || (echo "wheel is missing clicketysplit/server/static/index.html" && \
+                python -m zipfile -l "$WHEEL" && exit 1)
+          python -m zipfile -l "$WHEEL" | grep -q "clicketysplit/server/static/assets/" \
+            || (echo "wheel is missing clicketysplit/server/static/assets/*" && \
+                python -m zipfile -l "$WHEEL" && exit 1)
