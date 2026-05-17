@@ -251,7 +251,7 @@ def register_routes(app: Flask) -> None:
     routes.register_detect_routes(app)
     routes.register_segments_routes(app)
     routes.register_export_routes(app)
-    # TODO(task 8): routes.register_wizard_routes(app)
+    routes.register_setup_routes(app)
 
 
 # ---------------------------------------------------------------------------

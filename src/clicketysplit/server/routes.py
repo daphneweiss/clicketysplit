@@ -19,14 +19,21 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from flask import Flask, jsonify, request, send_file
+from pydantic import ValidationError
 
 from .. import __version__
 from ..audio_io import SUPPORTED_EXTENSIONS, concatenate, load_audio
-from ..config import ExperimentConfig, load_config
+from ..config import ExperimentConfig, load_config, save_config
 from ..denoise import HAS_NOISEREDUCE
 from ..detection import available_detectors
 from ..detection.base import LabeledSegment
 from ..detection.pipeline import detect_for_condition
+from ..discovery import (
+    DiscoveryResult,
+    ScannedCondition,
+    ScannedSpeaker,
+    scan_recordings,
+)
 from ..export import (
     HAS_PARSELMOUTH,
     build_manifest,
@@ -35,10 +42,8 @@ from ..export import (
     write_textgrid,
     write_tokens_csv,
 )
-from .app import ApiError, get_active_config, safe_resolve
-
-
-# TODO(task 8): /api/discover, POST /api/config, /api/session, /api/resolve_browse
+from ..session import load_session, save_session
+from .app import ApiError, _invalidate_config_cache, get_active_config, safe_resolve
 
 
 __all__ = [
@@ -49,6 +54,7 @@ __all__ = [
     "register_meta_routes",
     "register_overview_route",
     "register_segments_routes",
+    "register_setup_routes",
     "register_stimulus_routes",
 ]
 
@@ -547,6 +553,278 @@ def register_detect_routes(app: Flask) -> None:
                         }
                     )
         return jsonify({"status": "ok", "results": results})
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard write routes (task 8)
+#
+# These four routes cover the wizard's first-time experience: discover a
+# recordings root, persist a new clicketysplit.json, read/write the
+# per-experiment session JSON, and best-effort resolve a folder name handed
+# back by the File System Access API into an absolute path.
+#
+# Per CONTRACT_NOTES C6 the recordings root is a TEXT FIELD; resolve_browse
+# is opportunistic help, never a contract. Empty matches → 200 with [], not
+# 404, so the wizard treats it as "user must type the path".
+# ---------------------------------------------------------------------------
+
+
+def _scanned_condition_to_dict(
+    c: ScannedCondition, root: Path
+) -> dict[str, Any]:
+    """Serialize a ScannedCondition. Paths stay absolute (per dataclass spec).
+
+    The wizard renders absolute paths back to the user; relativizing here
+    would lose the disambiguation that the discovery root provides.
+    """
+    return {
+        "name": c.name,
+        "n_files": c.n_files,
+        "total_bytes": c.total_bytes,
+        "files": [str(f) for f in c.files],
+    }
+
+
+def _scanned_speaker_to_dict(s: ScannedSpeaker, root: Path) -> dict[str, Any]:
+    return {
+        "id": s.id,
+        "subdir": s.subdir,
+        "conditions": [_scanned_condition_to_dict(c, root) for c in s.conditions],
+        "flat_files": [str(f) for f in s.flat_files],
+    }
+
+
+def _discovery_result_to_dict(d: DiscoveryResult) -> dict[str, Any]:
+    return {
+        "root": str(d.root),
+        "speakers": [_scanned_speaker_to_dict(s, d.root) for s in d.speakers],
+        "unique_condition_names": list(d.unique_condition_names),
+    }
+
+
+def _resolve_abs_browse_candidates(name: str) -> list[Path]:
+    """Search common ``$HOME`` locations for a directory named ``name``.
+
+    Best-effort assist for the wizard's "Browse" button (CONTRACT_NOTES C6).
+    The text field is the contract; this just makes typical layouts a
+    one-click pre-fill instead of a paste. Unreadable directories are
+    skipped silently.
+    """
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        return []
+
+    home = Path.home()
+    search_roots = [
+        home,
+        home / "Desktop",
+        home / "Documents",
+        home / "Downloads",
+        home / "dev",
+        home / "recordings",
+    ]
+
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for base in search_roots:
+        try:
+            if not base.is_dir():
+                continue
+        except OSError:
+            continue
+        try:
+            entries = list(base.iterdir())
+        except (OSError, PermissionError):
+            continue
+        for entry in entries:
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            if entry.name != name:
+                continue
+            try:
+                resolved = entry.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            matches.append(resolved)
+
+    # Sort by modified-time descending so the most-recently-used candidate
+    # is offered first. Stat errors push an entry to the end.
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return -1.0
+
+    matches.sort(key=_mtime, reverse=True)
+    return matches[:5]
+
+
+def register_setup_routes(app: Flask) -> None:
+    """Wire the four setup-wizard write routes onto ``app``."""
+
+    @app.route("/api/discover", methods=["POST"])
+    def discover_route() -> Any:
+        data = _json_body()
+        root_str = _require_str(data, "root")
+        # The wizard hands us a path the user typed (or pasted from the
+        # opportunistic Browse helper). No experiment is loaded yet, so
+        # safe_resolve doesn't apply — but we still need an absolute path.
+        candidate = Path(root_str).expanduser()
+        if not candidate.is_absolute():
+            raise ApiError(
+                "validation_error",
+                f"root must be an absolute path; got {root_str!r}",
+                status=400,
+            )
+        try:
+            resolved = candidate.resolve()
+        except OSError as exc:
+            raise ApiError(
+                "validation_error",
+                f"Could not resolve root: {exc}",
+                status=400,
+            ) from exc
+        if not resolved.exists():
+            raise ApiError(
+                "not_found",
+                f"Recordings root does not exist: {resolved}",
+                status=400,
+            )
+        if not resolved.is_dir():
+            raise ApiError(
+                "not_found",
+                f"Recordings root is not a directory: {resolved}",
+                status=400,
+            )
+        result = scan_recordings(resolved)
+        return jsonify(_discovery_result_to_dict(result))
+
+    @app.route("/api/config", methods=["POST"])
+    def write_config_route() -> Any:
+        # NB: this is the WIZARD WRITE route. The read counterpart and
+        # /api/config/load both live in register_config_routes. Keeping
+        # the wizard's write here lets task 7's read/load route group stay
+        # untouched (per task brief).
+        data = _json_body()
+        config_dir_str = _require_str(data, "config_dir")
+        config_payload = data.get("config")
+        if not isinstance(config_payload, dict):
+            raise ApiError(
+                "validation_error",
+                "Missing or invalid 'config' object in request body",
+                status=400,
+            )
+
+        config_dir = Path(config_dir_str).expanduser()
+        if not config_dir.is_absolute():
+            raise ApiError(
+                "validation_error",
+                f"config_dir must be an absolute path; got {config_dir_str!r}",
+                status=400,
+            )
+
+        # Either exists as a directory, or doesn't exist yet (we create it).
+        if config_dir.exists() and not config_dir.is_dir():
+            raise ApiError(
+                "validation_error",
+                f"config_dir exists but is not a directory: {config_dir}",
+                status=400,
+            )
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        # Phase 1: pydantic schema validation (no FS touch).
+        try:
+            cfg = ExperimentConfig.model_validate(config_payload)
+        except ValidationError as exc:
+            raise ApiError(
+                "validation_error",
+                f"Config payload failed schema validation: {exc}",
+                status=400,
+            ) from exc
+
+        # Write to disk before phase 3 disk-refs check, per task brief:
+        # the file IS written even if stimulus lists are missing, so the
+        # wizard can iterate without re-typing every field.
+        config_path = (config_dir / "clicketysplit.json").resolve()
+        save_config(cfg, config_path)
+
+        # Phase 3: disk-refs check via load_config (mirrors the existing
+        # /api/config/load flow). On failure the file is on disk but we
+        # report the validation error so the wizard can prompt the user
+        # to fix stimulus_list paths.
+        try:
+            loaded = load_config(config_path)
+        except Exception as exc:
+            raise ApiError(
+                "validation_error",
+                (
+                    f"Config saved to {config_path}, but disk references "
+                    f"are missing: {exc}"
+                ),
+                status=400,
+                path=str(config_path),
+            ) from exc
+
+        # Success: flip active experiment + invalidate the lru_cache so
+        # the very next /api/config GET sees this exact config.
+        app.config["experiment_path"] = str(config_path)
+        _invalidate_config_cache()
+        # Touch ``loaded`` so the variable isn't flagged unused; the side
+        # effect we care about is the disk-refs check above.
+        _ = loaded
+
+        return jsonify({"status": "ok", "path": str(config_path)})
+
+    @app.route("/api/session", methods=["GET"])
+    def get_session_route() -> Any:
+        config = get_active_config(app)
+        assert config._config_dir is not None
+        data = load_session(config._config_dir, config.output_root)
+        return jsonify(data)
+
+    @app.route("/api/session", methods=["POST"])
+    def post_session_route() -> Any:
+        config = get_active_config(app)
+        assert config._config_dir is not None
+
+        payload = _json_body()
+        # ``autosave`` may be passed as either a body field or a query
+        # flag (per task brief). The body field wins if both are present.
+        # We pop it out so it isn't persisted as part of the session blob.
+        if "autosave" in payload:
+            autosave = bool(payload.pop("autosave"))
+        else:
+            autosave = request.args.get("autosave", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+
+        written = save_session(
+            config._config_dir,
+            payload,
+            autosave=autosave,
+            output_subdir=config.output_root,
+        )
+        try:
+            rel = written.relative_to(config._config_dir).as_posix()
+        except ValueError:
+            rel = str(written)
+        return jsonify({"status": "ok", "path": rel})
+
+    @app.route("/api/resolve_browse", methods=["POST"])
+    def resolve_browse_route() -> Any:
+        data = _json_body()
+        name = _require_str(data, "name")
+        matches = _resolve_abs_browse_candidates(name)
+        # Empty matches → 200 with [], NOT a 404; the wizard treats it as
+        # "user must type the path" rather than as an error (C6).
+        return jsonify({"matches": [str(p) for p in matches]})
 
 
 # ---------------------------------------------------------------------------
