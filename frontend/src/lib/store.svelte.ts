@@ -14,6 +14,7 @@
 // the 1-second debounced /api/segments save.
 
 import {
+  exportAll as apiExportAll,
   getSegments as apiGetSegments,
   getConfig as apiGetConfig,
   getCapabilities as apiGetCapabilities,
@@ -30,6 +31,7 @@ import type {
   Condition,
   DiscoveryResult,
   ExperimentConfig,
+  ExportResponse,
   LabelAnchor,
   PresentationOrder,
   Segment,
@@ -105,6 +107,52 @@ export interface AppState {
    * watch this to force re-runs of $effect blocks tied to the active
    * audio. */
   audioGeneration: number;
+
+  /**
+   * Export step (task 11): which tokens the user has marked for export,
+   * indexed spk → cond → assigned_name → tokenIndex-within-label (1-based) → bool.
+   *
+   * Per CONTRACT_NOTES C4, defaults derive lazily the first time a
+   * condition is entered in Select: every word-typed segment with
+   * `status == "accepted"` AND non-empty `assigned_name` starts selected.
+   * Other word-typed segments (pending/rejected) are visible and
+   * deselected by default — the user can opt them in.
+   *
+   * Persisted via /api/session so selections survive a reload.
+   */
+  selectedTokens: Record<
+    string,
+    Record<string, Record<string, Record<number, boolean>>>
+  >;
+
+  /** Export step status. */
+  exportState: "idle" | "running" | "done";
+
+  /**
+   * Per-pair results from the most recent /api/export_all call. Populated
+   * after the request returns; rendered by Export.svelte.
+   */
+  perPairResult: PerPairResult[];
+
+  /** The output directory shown in the success summary (extracted from
+   * the first result's `output_dir`; trimmed of the trailing `tokens/`). */
+  exportOutputDir: string | null;
+}
+
+export interface PerPairResult {
+  spk: string;
+  cond: string;
+  status: "ok" | "error" | "running";
+  /** Filename count and tokens_per_word from the export response. */
+  counts?: {
+    n_exported: number;
+    tokens_per_word: Record<string, number>;
+    skipped?: Record<string, number>;
+  };
+  /** Output directory of this pair (relative to experiment root). */
+  outputDir?: string;
+  /** Error code+message when status==="error". */
+  error?: { code: string; message: string };
 }
 
 export const state: AppState = $state({
@@ -121,6 +169,10 @@ export const state: AppState = $state({
   toasts: [],
   booted: false,
   audioGeneration: 0,
+  selectedTokens: {},
+  exportState: "idle",
+  perPairResult: [],
+  exportOutputDir: null,
 });
 
 // ---- Audio cache (LRU, max 5 buffers) -------------------------------------
@@ -832,6 +884,7 @@ export async function pushSessionToBackend(autosave: boolean): Promise<void> {
         lastConfigPath: state.lastConfigPath,
         currentTokenIndex: cond ? cond.currentTokenIndex : 0,
         zoom: cond ? cond.zoom : null,
+        selectedTokens: serializeSelections(),
       },
       autosave,
     );
@@ -843,6 +896,454 @@ export async function pushSessionToBackend(autosave: boolean): Promise<void> {
   } finally {
     _sessionInflight = false;
   }
+}
+
+// ---- Selection serialization (session round-trip) -------------------------
+
+/** Shape we serialize to /api/session: plain object indexed
+ *  spk → cond → word → tokenIndex (number) → bool. */
+type SerializedSelections = Record<
+  string,
+  Record<string, Record<string, Record<string, boolean>>>
+>;
+
+function serializeSelections(): SerializedSelections {
+  // The proxy objects produced by $state survive JSON.stringify, but cloning
+  // here keeps the payload predictable (and drops Symbol noise if any).
+  const out: SerializedSelections = {};
+  for (const [spk, spkSlot] of Object.entries(state.selectedTokens)) {
+    out[spk] = {};
+    for (const [cond, condSlot] of Object.entries(spkSlot)) {
+      out[spk][cond] = {};
+      for (const [name, indices] of Object.entries(condSlot)) {
+        out[spk][cond][name] = {};
+        for (const [tokenIdx, sel] of Object.entries(indices)) {
+          out[spk][cond][name][String(tokenIdx)] = !!sel;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function deserializeSelections(raw: unknown): void {
+  if (!raw || typeof raw !== "object") return;
+  const cleaned: AppState["selectedTokens"] = {};
+  for (const [spk, spkSlot] of Object.entries(raw as Record<string, unknown>)) {
+    if (!spkSlot || typeof spkSlot !== "object") continue;
+    cleaned[spk] = {};
+    for (const [cond, condSlot] of Object.entries(
+      spkSlot as Record<string, unknown>,
+    )) {
+      if (!condSlot || typeof condSlot !== "object") continue;
+      cleaned[spk][cond] = {};
+      for (const [name, indices] of Object.entries(
+        condSlot as Record<string, unknown>,
+      )) {
+        if (!indices || typeof indices !== "object") continue;
+        cleaned[spk][cond][name] = {};
+        for (const [tokenIdx, sel] of Object.entries(
+          indices as Record<string, unknown>,
+        )) {
+          const n = Number(tokenIdx);
+          if (!Number.isFinite(n)) continue;
+          cleaned[spk][cond][name][n] = !!sel;
+        }
+      }
+    }
+  }
+  state.selectedTokens = cleaned;
+}
+
+// ---- Selection (task 11, Select.svelte) -----------------------------------
+//
+// Selection lives in `state.selectedTokens` indexed by:
+//
+//   spk → cond → assigned_name → tokenIndex (1-based within that label) → bool
+//
+// Per CONTRACT_NOTES C4, the default-selected set is "every word-typed
+// segment with status=='accepted' AND non-empty assigned_name". This is
+// computed lazily: the first time a condition's segments are available AND
+// the user enters Select for that pair, we walk the segments and populate
+// the map. Once populated we never auto-overwrite; subsequent
+// add/remove/relabel edits are pushed in by `syncSelectionAfterSegmentEdit`.
+
+/** Return word-typed segments grouped by 1-based index within their
+ *  `assigned_name`, in source order. Used by Select.svelte to render
+ *  rows AND by the default-selection initializer. */
+export interface TokenGrouping {
+  /** assigned_name → list of {segmentIdx, tokenIndex (1-based)} */
+  groups: Record<string, Array<{ segmentIdx: number; tokenIndex: number }>>;
+  /** segment indices of every word-typed segment with EMPTY assigned_name */
+  unlabeled: number[];
+  /** assigned_names in the order encountered in source order */
+  labelOrder: string[];
+}
+
+export function groupTokensByLabel(
+  segments: readonly Segment[],
+): TokenGrouping {
+  const groups: Record<string, Array<{ segmentIdx: number; tokenIndex: number }>> = {};
+  const labelOrder: string[] = [];
+  const unlabeled: number[] = [];
+  const counters: Record<string, number> = {};
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.segment_type !== "word") continue;
+    const name = seg.assigned_name?.trim() ?? "";
+    if (!name) {
+      unlabeled.push(i);
+      continue;
+    }
+    if (!(name in groups)) {
+      groups[name] = [];
+      labelOrder.push(name);
+    }
+    counters[name] = (counters[name] ?? 0) + 1;
+    groups[name].push({ segmentIdx: i, tokenIndex: counters[name] });
+  }
+  return { groups, unlabeled, labelOrder };
+}
+
+function defaultSelectionForCondition(
+  segments: readonly Segment[],
+): Record<string, Record<number, boolean>> {
+  const out: Record<string, Record<number, boolean>> = {};
+  const counters: Record<string, number> = {};
+  for (const seg of segments) {
+    if (seg.segment_type !== "word") continue;
+    const name = seg.assigned_name?.trim() ?? "";
+    if (!name) continue;
+    counters[name] = (counters[name] ?? 0) + 1;
+    const tokenIdx = counters[name];
+    if (!(name in out)) out[name] = {};
+    out[name][tokenIdx] = seg.status === "accepted";
+  }
+  return out;
+}
+
+/**
+ * Ensure `state.selectedTokens[spk][cond]` exists, deriving defaults from
+ * the loaded segments if not. Safe to call repeatedly. No-op if no
+ * segments are loaded yet (the caller is expected to await loadCondition).
+ */
+export function ensureSelectionInitialized(spk: string, cond: string): void {
+  const cs = state.reviewProgress[spk]?.[cond];
+  if (!cs || cs.segments.length === 0) return;
+  const spkSlot = state.selectedTokens[spk] ?? {};
+  state.selectedTokens[spk] = spkSlot;
+  if (spkSlot[cond]) {
+    // Already initialized; only fill in missing groups for labels that
+    // appeared after the initial pass (e.g. user added a token in Review).
+    const existing = spkSlot[cond];
+    const grouping = groupTokensByLabel(cs.segments);
+    for (const name of grouping.labelOrder) {
+      if (!(name in existing)) existing[name] = {};
+      for (const { tokenIndex } of grouping.groups[name]) {
+        // Don't overwrite existing user choices, but newly-seen
+        // (label, tokenIndex) pairs default to whatever the underlying
+        // segment's accepted-status is.
+        if (!(tokenIndex in existing[name])) {
+          const segIdx = grouping.groups[name].find(
+            (g) => g.tokenIndex === tokenIndex,
+          )!.segmentIdx;
+          existing[name][tokenIndex] = cs.segments[segIdx].status === "accepted";
+        }
+      }
+    }
+    return;
+  }
+  spkSlot[cond] = defaultSelectionForCondition(cs.segments);
+}
+
+/** Toggle a single token's selection state. */
+export function toggleTokenSelection(
+  spk: string,
+  cond: string,
+  assignedName: string,
+  tokenIndex: number,
+): void {
+  ensureSelectionInitialized(spk, cond);
+  const slot = state.selectedTokens[spk]?.[cond];
+  if (!slot) return;
+  if (!(assignedName in slot)) slot[assignedName] = {};
+  const next = !slot[assignedName][tokenIndex];
+  slot[assignedName][tokenIndex] = next;
+  scheduleSessionSave();
+}
+
+/** Bulk select/deselect every token under a given assigned_name. */
+export function setWordSelection(
+  spk: string,
+  cond: string,
+  assignedName: string,
+  selected: boolean,
+): void {
+  ensureSelectionInitialized(spk, cond);
+  const cs = state.reviewProgress[spk]?.[cond];
+  if (!cs) return;
+  const slot = state.selectedTokens[spk]?.[cond];
+  if (!slot) return;
+  if (!(assignedName in slot)) slot[assignedName] = {};
+  const grouping = groupTokensByLabel(cs.segments);
+  const group = grouping.groups[assignedName] ?? [];
+  for (const { tokenIndex } of group) {
+    slot[assignedName][tokenIndex] = selected;
+  }
+  scheduleSessionSave();
+}
+
+/** Bulk select/deselect every eligible token in the condition. */
+export function setAllSelection(
+  spk: string,
+  cond: string,
+  selected: boolean,
+): void {
+  ensureSelectionInitialized(spk, cond);
+  const cs = state.reviewProgress[spk]?.[cond];
+  if (!cs) return;
+  const slot = state.selectedTokens[spk]?.[cond];
+  if (!slot) return;
+  const grouping = groupTokensByLabel(cs.segments);
+  for (const name of grouping.labelOrder) {
+    if (!(name in slot)) slot[name] = {};
+    for (const { tokenIndex } of grouping.groups[name]) {
+      slot[name][tokenIndex] = selected;
+    }
+  }
+  scheduleSessionSave();
+}
+
+export interface SelectionSummary {
+  selectedCount: number;
+  totalEligible: number;
+  unlabeledCount: number;
+  perWord: Record<string, { selected: number; total: number }>;
+}
+
+/** Summary of the current selection for a (spk, cond) pair. */
+export function selectionSummary(spk: string, cond: string): SelectionSummary {
+  const cs = state.reviewProgress[spk]?.[cond];
+  if (!cs) {
+    return { selectedCount: 0, totalEligible: 0, unlabeledCount: 0, perWord: {} };
+  }
+  const grouping = groupTokensByLabel(cs.segments);
+  const slot = state.selectedTokens[spk]?.[cond] ?? {};
+  let selectedCount = 0;
+  let totalEligible = 0;
+  const perWord: Record<string, { selected: number; total: number }> = {};
+  for (const name of grouping.labelOrder) {
+    const group = grouping.groups[name];
+    let s = 0;
+    for (const { tokenIndex } of group) {
+      if (slot[name]?.[tokenIndex]) s++;
+    }
+    perWord[name] = { selected: s, total: group.length };
+    selectedCount += s;
+    totalEligible += group.length;
+  }
+  return {
+    selectedCount,
+    totalEligible,
+    unlabeledCount: grouping.unlabeled.length,
+    perWord,
+  };
+}
+
+/** Convert the store's `selectedTokens` slot into the request shape that
+ *  /api/export expects: { word: [tokenIndex, ...] } with empty lists
+ *  dropped. */
+function selectionRequestFor(
+  spk: string,
+  cond: string,
+): Record<string, number[]> {
+  const slot = state.selectedTokens[spk]?.[cond] ?? {};
+  const out: Record<string, number[]> = {};
+  for (const [name, indices] of Object.entries(slot)) {
+    const picked: number[] = [];
+    for (const [k, v] of Object.entries(indices)) {
+      if (v) picked.push(Number(k));
+    }
+    if (picked.length > 0) {
+      picked.sort((a, b) => a - b);
+      out[name] = picked;
+    }
+  }
+  return out;
+}
+
+/** Mean duration (sec) of word-typed segments that are currently selected.
+ *  Used by Export.svelte for the rough output-size estimate. */
+export function selectedTokenMeanDuration(): number {
+  let totalMs = 0;
+  let n = 0;
+  for (const [spk, cspk] of Object.entries(state.selectedTokens)) {
+    for (const [cond, csel] of Object.entries(cspk)) {
+      const cs = state.reviewProgress[spk]?.[cond];
+      if (!cs) continue;
+      const grouping = groupTokensByLabel(cs.segments);
+      for (const name of grouping.labelOrder) {
+        for (const { segmentIdx, tokenIndex } of grouping.groups[name]) {
+          if (csel[name]?.[tokenIndex]) {
+            totalMs += cs.segments[segmentIdx].duration_ms;
+            n++;
+          }
+        }
+      }
+    }
+  }
+  return n > 0 ? totalMs / n / 1000 : 0;
+}
+
+/**
+ * Collect every (spk, cond) pair that has at least one selected token and
+ * POST a single /api/export_all request. Result rows are pushed into
+ * `state.perPairResult` as the response arrives (no streaming — the API is
+ * a single response).
+ *
+ * Optional filters mirror the API's `speakers` / `conditions` arrays; when
+ * omitted we iterate every pair currently held in the selection.
+ */
+export async function runExportAll(
+  speakers?: string[],
+  conditions?: string[],
+): Promise<void> {
+  if (!state.config) {
+    pushToast("Load an experiment first", "warn");
+    return;
+  }
+  if (state.exportState === "running") return;
+
+  // Build selections shape and the pair list.
+  const selections: Record<
+    string,
+    Record<string, Record<string, number[]>>
+  > = {};
+  const spkSet = speakers ? new Set(speakers) : null;
+  const cndSet = conditions ? new Set(conditions) : null;
+  const pairs: Array<{ spk: string; cond: string }> = [];
+  for (const spk of Object.keys(state.selectedTokens)) {
+    if (spkSet && !spkSet.has(spk)) continue;
+    const spkSlot = state.selectedTokens[spk];
+    for (const cond of Object.keys(spkSlot)) {
+      if (cndSet && !cndSet.has(cond)) continue;
+      const req = selectionRequestFor(spk, cond);
+      if (Object.keys(req).length === 0) continue;
+      if (!selections[spk]) selections[spk] = {};
+      selections[spk][cond] = req;
+      pairs.push({ spk, cond });
+    }
+  }
+
+  if (pairs.length === 0) {
+    pushToast("No tokens selected for export", "warn");
+    return;
+  }
+
+  state.exportState = "running";
+  // Seed perPairResult so the UI shows a "running" row for every pair we're
+  // about to ask for. They'll be overwritten on response.
+  state.perPairResult = pairs.map((p) => ({
+    spk: p.spk,
+    cond: p.cond,
+    status: "running",
+  }));
+  state.exportOutputDir = null;
+
+  try {
+    const speakersArg = speakers ?? Array.from(new Set(pairs.map((p) => p.spk)));
+    const conditionsArg =
+      conditions ?? Array.from(new Set(pairs.map((p) => p.cond)));
+    const resp = await apiExportAll(speakersArg, conditionsArg, selections);
+    const results = resp.results ?? [];
+    // Map each (spk, cond) row to its result.
+    const byKey = new Map<string, unknown>();
+    for (const r of results) {
+      // Backend may emit ok or error rows; both carry speaker_id/condition.
+      const rr = r as unknown as {
+        speaker_id?: string;
+        condition?: string;
+      };
+      if (rr.speaker_id && rr.condition) {
+        byKey.set(`${rr.speaker_id}\x1F${rr.condition}`, r);
+      }
+    }
+    const next: PerPairResult[] = pairs.map((p) => {
+      const key = `${p.spk}\x1F${p.cond}`;
+      const r = byKey.get(key);
+      if (!r) {
+        return {
+          spk: p.spk,
+          cond: p.cond,
+          status: "error",
+          error: { code: "no_result", message: "Backend returned no result for this pair." },
+        };
+      }
+      const rr = r as unknown as {
+        speaker_id?: string;
+        condition?: string;
+        status?: string;
+        error?: { code: string; message: string };
+        n_exported?: number;
+        tokens_per_word?: Record<string, number>;
+        skipped?: Record<string, number>;
+        output_dir?: string;
+      };
+      if (rr.status === "error" && rr.error) {
+        return {
+          spk: p.spk,
+          cond: p.cond,
+          status: "error",
+          error: rr.error,
+        };
+      }
+      const ok = rr as unknown as ExportResponse;
+      return {
+        spk: p.spk,
+        cond: p.cond,
+        status: "ok",
+        counts: {
+          n_exported: ok.n_exported,
+          tokens_per_word: ok.tokens_per_word,
+          skipped: ok.skipped,
+        },
+        outputDir: ok.output_dir,
+      };
+    });
+    state.perPairResult = next;
+    // The summary panel shows a single "open output folder" path; use the
+    // experiment's output_root parent (every result writes under
+    // <output_root>/<spk>/<cond>/tokens). We extract by stripping the tail.
+    const firstOk = next.find((p) => p.status === "ok" && p.outputDir);
+    if (firstOk?.outputDir) {
+      state.exportOutputDir = firstOk.outputDir;
+    }
+  } catch (err) {
+    toastError(err, "Export failed");
+    // Mark every running row as errored so the UI doesn't dangle.
+    state.perPairResult = state.perPairResult.map((r) =>
+      r.status === "running"
+        ? {
+            ...r,
+            status: "error",
+            error: {
+              code: err instanceof ApiError ? err.code : "internal",
+              message: err instanceof Error ? err.message : "Export failed",
+            },
+          }
+        : r,
+    );
+  } finally {
+    state.exportState = "done";
+  }
+}
+
+/** Reset the export panel back to idle (called when the user navigates
+ *  away from Export or wants to re-run cleanly). */
+export function resetExportState(): void {
+  state.exportState = "idle";
+  state.perPairResult = [];
+  state.exportOutputDir = null;
 }
 
 // ---- Boot sequence --------------------------------------------------------
@@ -913,6 +1414,9 @@ export async function boot(): Promise<void> {
           !state.lastRecordingsRoot
         ) {
           state.lastRecordingsRoot = sess.lastRecordingsRoot;
+        }
+        if (sess.selectedTokens) {
+          deserializeSelections(sess.selectedTokens);
         }
       }
     } catch (err) {
