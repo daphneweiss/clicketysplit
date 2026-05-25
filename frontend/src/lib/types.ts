@@ -96,6 +96,7 @@ export interface DiscoveryResult {
   root: string;
   speakers: ScannedSpeaker[];
   unique_condition_names: string[];
+  stimulus_list_files: string[];
 }
 
 // ---- Segments -------------------------------------------------------------

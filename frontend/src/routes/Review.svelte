@@ -468,8 +468,7 @@
   }
 
   .rv-waveform {
-    flex: 1;
-    min-height: 240px;
+    flex: 0 0 360px;
     background: #1e1f23;
     border-bottom: 1px solid var(--border);
   }

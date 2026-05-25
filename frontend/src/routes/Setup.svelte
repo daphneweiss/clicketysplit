@@ -45,12 +45,12 @@
   let recordingsRootInput = $state<string>(appState.lastRecordingsRoot ?? "");
   let discovering = $state<boolean>(false);
   let discovery = $state<DiscoveryResult | null>(null);
-  // Best-effort: hide the Browse button unless the File System Access API
-  // is present. C6 mandates the text field is the contract.
-  const browseAvailable: boolean =
-    typeof window !== "undefined" &&
-    typeof (window as unknown as { showDirectoryPicker?: unknown })
-      .showDirectoryPicker === "function";
+  // Best-effort Browse helper. Chromium has showDirectoryPicker (clean UX,
+  // no file listing). Firefox/Safari fall back to <input webkitdirectory>,
+  // which prompts to read the folder's files — we only use the first file's
+  // webkitRelativePath to extract the folder name. C6 still says the text
+  // field is the contract; this is one-click pre-fill, not the source of truth.
+  let browseFileInput: HTMLInputElement | undefined = $state();
 
   // Sub-step 3 inputs: editable mirrors of the discovered tree.
   // `speakers` is a list of { id, subdir, included } and `conditions` is the
@@ -179,41 +179,59 @@
 
   // ---- Sub-step 2: recordings root + discover -----------------------------
 
-  async function browseRecordingsRoot(): Promise<void> {
-    if (!browseAvailable) return;
-    try {
-      // showDirectoryPicker returns a handle but NOT an absolute path. We
-      // POST the directory's .name to /api/resolve_browse which searches
-      // common HOME locations for a matching dir. This is opportunistic
-      // help only — C6 says the text field is the contract.
-      const win = window as unknown as {
-        showDirectoryPicker: () => Promise<{ name: string }>;
-      };
-      const handle = await win.showDirectoryPicker();
-      const result = await resolveBrowse(handle.name);
-      if (result.matches.length === 0) {
-        pushToast(
-          `Browse picked "${handle.name}" but no matching folder was found in your home. Please paste the absolute path.`,
-          "warn",
-        );
-      } else if (result.matches.length === 1) {
-        recordingsRootInput = result.matches[0];
-        pushToast("Filled in path from Browse.", "info");
-      } else {
-        // Pick the first as a hint, but tell the user there were multiple.
-        recordingsRootInput = result.matches[0];
-        pushToast(
-          `Found ${result.matches.length} candidates; using "${result.matches[0]}". Edit the field if that's wrong.`,
-          "info",
-        );
-      }
-    } catch (err) {
-      // User cancelled or the API isn't available — silent.
-      if ((err as { name?: string }).name !== "AbortError") {
-        // eslint-disable-next-line no-console
-        console.warn("browse failed:", err);
-      }
+  async function fillFromFolderName(name: string): Promise<void> {
+    const result = await resolveBrowse(name);
+    if (result.matches.length === 0) {
+      pushToast(
+        `Browse picked "${name}" but no matching folder was found in your home. Please paste the absolute path.`,
+        "warn",
+      );
+    } else if (result.matches.length === 1) {
+      recordingsRootInput = result.matches[0];
+      pushToast("Filled in path from Browse.", "info");
+    } else {
+      recordingsRootInput = result.matches[0];
+      pushToast(
+        `Found ${result.matches.length} candidates; using "${result.matches[0]}". Edit the field if that's wrong.`,
+        "info",
+      );
     }
+  }
+
+  async function browseRecordingsRoot(): Promise<void> {
+    // Chromium: showDirectoryPicker returns a handle with .name and no path.
+    // Firefox/Safari: no such API; fall through to the hidden
+    // <input webkitdirectory> which lets the user pick a folder and exposes
+    // the folder name via the first File's webkitRelativePath.
+    const win = window as unknown as {
+      showDirectoryPicker?: () => Promise<{ name: string }>;
+    };
+    if (typeof win.showDirectoryPicker === "function") {
+      try {
+        const handle = await win.showDirectoryPicker();
+        await fillFromFolderName(handle.name);
+      } catch (err) {
+        if ((err as { name?: string }).name !== "AbortError") {
+          // eslint-disable-next-line no-console
+          console.warn("browse failed:", err);
+        }
+      }
+      return;
+    }
+    if (browseFileInput) browseFileInput.click();
+  }
+
+  async function onBrowseFilesPicked(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+    const rel =
+      (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath ??
+      "";
+    const folderName = rel.split("/")[0] ?? "";
+    // Reset so picking the same folder again still fires a change event.
+    input.value = "";
+    if (folderName) await fillFromFolderName(folderName);
   }
 
   async function runDiscover(): Promise<void> {
@@ -240,19 +258,29 @@
       }));
       conditions = uniqueConditionsFromDiscovery(d);
 
-      // Now try to list stimulus lists. This only works if we already have
-      // a saved config — which we don't yet. We try anyway and silently
-      // fall back; users may need to fill paths manually.
-      try {
-        const sl = await listStimulusLists();
-        stimulusListFiles = sl.files;
-        stimulusListsRoot = sl.stimulus_lists_root;
+      // Discover already probed the conventional <root>/../stimulus_lists/
+      // sibling and returned any *.txt files it found, so the wizard can
+      // pre-fill stimulus-list paths on a fresh setup without needing a
+      // saved config first.
+      stimulusListFiles = d.stimulus_list_files;
+      if (stimulusListFiles.length > 0) {
         for (const c of conditions) {
           if (!c.stimulus_list) c.stimulus_list = pickStimulusListFor(c.name);
         }
-      } catch {
-        // No active experiment yet — that's fine; user can type paths
-        // directly into the stimulus_list field.
+      } else {
+        // Fall back to the saved-config endpoint (loading an existing
+        // experiment goes through here too).
+        try {
+          const sl = await listStimulusLists();
+          stimulusListFiles = sl.files;
+          stimulusListsRoot = sl.stimulus_lists_root;
+          for (const c of conditions) {
+            if (!c.stimulus_list) c.stimulus_list = pickStimulusListFor(c.name);
+          }
+        } catch {
+          // No sibling stimulus_lists/ and no saved experiment — user types
+          // the paths directly.
+        }
       }
 
       if (d.speakers.length === 0) {
@@ -460,16 +488,22 @@
           bind:value={recordingsRootInput}
           spellcheck={false}
         />
-        {#if browseAvailable}
-          <button
-            class="btn"
-            type="button"
-            onclick={browseRecordingsRoot}
-            title="Best-effort: picks a folder and asks the server to resolve its absolute path"
-          >
-            Browse…
-          </button>
-        {/if}
+        <button
+          class="btn"
+          type="button"
+          onclick={browseRecordingsRoot}
+          title="Best-effort: picks a folder and asks the server to resolve its absolute path"
+        >
+          Browse…
+        </button>
+        <input
+          bind:this={browseFileInput}
+          type="file"
+          style="display: none"
+          multiple
+          onchange={onBrowseFilesPicked}
+          webkitdirectory={true}
+        />
         <button
           class="btn primary"
           onclick={runDiscover}

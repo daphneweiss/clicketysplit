@@ -594,11 +594,34 @@ def _scanned_speaker_to_dict(s: ScannedSpeaker, root: Path) -> dict[str, Any]:
     }
 
 
+def _probe_stimulus_list_candidates(recordings_root: Path) -> list[str]:
+    """List ``*.txt`` files in the conventional sibling ``stimulus_lists/`` dir.
+
+    The wizard runs discovery before the config is saved, so the saved-config
+    `/api/stimulus_lists` route can't answer yet. This probe lets the wizard
+    pre-fill stimulus-list paths on a fresh setup by looking where the
+    canonical layout (CONTRACT_NOTES C2) puts them: a sibling of
+    ``recordings/``. Returns ``[]`` if the sibling doesn't exist or isn't a
+    directory; the wizard treats that as "user types the path".
+    """
+    stim_dir = recordings_root.parent / "stimulus_lists"
+    if not stim_dir.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in stim_dir.iterdir()
+        if entry.is_file()
+        and not entry.name.startswith(".")
+        and entry.suffix.lower() == ".txt"
+    )
+
+
 def _discovery_result_to_dict(d: DiscoveryResult) -> dict[str, Any]:
     return {
         "root": str(d.root),
         "speakers": [_scanned_speaker_to_dict(s, d.root) for s in d.speakers],
         "unique_condition_names": list(d.unique_condition_names),
+        "stimulus_list_files": _probe_stimulus_list_candidates(d.root),
     }
 
 

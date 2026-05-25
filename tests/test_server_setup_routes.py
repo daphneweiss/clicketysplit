@@ -94,6 +94,42 @@ def test_discover_relative_path_rejected(client: FlaskClient) -> None:
     assert resp.get_json()["error"]["code"] == "validation_error"
 
 
+def test_discover_returns_sibling_stimulus_list_files(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """``/api/discover`` probes ``<root>/../stimulus_lists/*.txt`` so the
+    wizard can pre-fill stimulus-list paths before the config is saved.
+    """
+    experiment = tmp_path / "exp"
+    recordings = experiment / "recordings"
+    _touch(recordings / "speaker_01" / "cond_a" / "x.wav", size=10)
+    stim_dir = experiment / "stimulus_lists"
+    stim_dir.mkdir(parents=True)
+    (stim_dir / "cond_a.txt").write_text("apple\nbanana\n", encoding="utf-8")
+    (stim_dir / "cond_b.txt").write_text("dog\negg\n", encoding="utf-8")
+    (stim_dir / ".hidden.txt").write_text("ignore me", encoding="utf-8")
+    (stim_dir / "notes.md").write_text("not a stim list", encoding="utf-8")
+
+    resp = _post_json(client, "/api/discover", {"root": str(recordings)})
+
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["stimulus_list_files"] == ["cond_a.txt", "cond_b.txt"]
+
+
+def test_discover_returns_empty_stimulus_list_files_when_sibling_missing(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    """When ``<root>/../stimulus_lists/`` doesn't exist, the field is ``[]``
+    rather than an error — the wizard treats that as "user types the paths".
+    """
+    recordings = tmp_path / "rec_only"
+    _touch(recordings / "speaker_01" / "cond_a" / "x.wav", size=10)
+    resp = _post_json(client, "/api/discover", {"root": str(recordings)})
+    assert resp.status_code == 200
+    assert resp.get_json()["stimulus_list_files"] == []
+
+
 def test_discover_missing_root_field(client: FlaskClient) -> None:
     resp = _post_json(client, "/api/discover", {})
     assert resp.status_code == 400

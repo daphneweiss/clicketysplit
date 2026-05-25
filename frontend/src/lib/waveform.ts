@@ -71,24 +71,32 @@ export function computeEnvelope(buffer: AudioBuffer): Envelope {
 }
 
 // ---------------------------------------------------------------------------
-// Decoding helper (shared AudioContext)
+// Decoding helper
 // ---------------------------------------------------------------------------
 
 /**
  * Fetch `url` and decode it into an AudioBuffer. Throws on network or
- * decode failure. Caller passes the AudioContext to use so the engine
- * keeps a single shared instance.
+ * decode failure.
+ *
+ * Decode goes through an OfflineAudioContext instead of the shared
+ * playback AudioContext: a regular AudioContext created before any user
+ * gesture starts in `suspended` state under browser autoplay policy, and
+ * Firefox's `decodeAudioData` can hang indefinitely on a suspended
+ * context. OfflineAudioContext has no audio output and is always
+ * `running`, so decoding works regardless of user interaction. The `ctx`
+ * parameter is retained for ABI compatibility with the playback engine.
  */
 export async function decodeAudioBuffer(
   url: string,
-  ctx: AudioContext,
+  _ctx?: AudioContext,
 ): Promise<AudioBuffer> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to fetch audio: HTTP ${response.status}`);
   }
   const arrayBuffer = await response.arrayBuffer();
-  return await ctx.decodeAudioData(arrayBuffer);
+  const decoder = new OfflineAudioContext(1, 1, 44100);
+  return await decoder.decodeAudioData(arrayBuffer);
 }
 
 // ---------------------------------------------------------------------------

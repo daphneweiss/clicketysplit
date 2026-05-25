@@ -385,9 +385,17 @@ export async function loadCondition(
   }
 
   // Ensure the slot exists so the UI can show a loading state.
-  const speakerSlot = state.reviewProgress[spk] ?? {};
-  state.reviewProgress[spk] = speakerSlot;
-  let condState = speakerSlot[cond];
+  //
+  // Subtle Svelte-5 trap: assigning a plain object into a $state proxy
+  // wraps it, but a local variable holding the pre-assignment reference is
+  // still the *unwrapped* original. Any subsequent mutation via that local
+  // bypasses the proxy's SET trap and reactivity never fires. So we must
+  // always re-read through `state.reviewProgress[spk]` after the assignment
+  // to grab the proxy, and the same for `condState` once we slot it in.
+  if (!state.reviewProgress[spk]) {
+    state.reviewProgress[spk] = {};
+  }
+  let condState = state.reviewProgress[spk]![cond];
   const alreadyLoaded =
     condState && condState.segments.length > 0 && !condState.loading;
   const haveAudio = !!getAudioCache(spk, cond);
@@ -400,7 +408,7 @@ export async function loadCondition(
 
   // Initialize an empty loading state if we don't already have one.
   if (!condState) {
-    condState = {
+    state.reviewProgress[spk]![cond] = {
       segments: [],
       labelAnchors: [],
       presentationOrder: "random",
@@ -414,7 +422,7 @@ export async function loadCondition(
       loading: true,
       loadError: null,
     };
-    speakerSlot[cond] = condState;
+    condState = state.reviewProgress[spk]![cond]!;
   } else {
     condState.loading = true;
     condState.loadError = null;
@@ -511,14 +519,31 @@ export async function loadCondition(
   }
 
   // Audio: load + decode + envelope. Cache hit = no work.
+  // DIAGNOSTIC: log each phase so a hang's location is visible in console.
+  const _t0 = performance.now();
+  // eslint-disable-next-line no-console
+  console.log(`[loadCondition] ${spk}/${cond} start`);
   try {
     if (!getAudioCache(spk, cond) || force) {
       const url = `/api/audio/working/${encodeURIComponent(spk)}/${encodeURIComponent(cond)}`;
+      // eslint-disable-next-line no-console
+      console.log(`[loadCondition] decode start ${Math.round(performance.now() - _t0)}ms`);
       const buffer = await decodeAudio(url);
+      // eslint-disable-next-line no-console
+      console.log(`[loadCondition] decode done ${Math.round(performance.now() - _t0)}ms (${buffer.duration.toFixed(2)}s, ${buffer.sampleRate}Hz)`);
       const envelope = computeEnvelope(buffer);
+      // eslint-disable-next-line no-console
+      console.log(`[loadCondition] envelope done ${Math.round(performance.now() - _t0)}ms`);
       putAudioCache(spk, cond, buffer, envelope);
+      // eslint-disable-next-line no-console
+      console.log(`[loadCondition] cache put ${Math.round(performance.now() - _t0)}ms`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`[loadCondition] cache hit`);
     }
   } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[loadCondition] decode FAILED ${Math.round(performance.now() - _t0)}ms`, err);
     condState.loadError =
       err instanceof Error ? err.message : "Failed to load audio";
     toastError(err, "Failed to load working audio");
@@ -536,6 +561,8 @@ export async function loadCondition(
   condState.loading = false;
   state.audioGeneration++;
   scheduleSessionSave();
+  // eslint-disable-next-line no-console
+  console.log(`[loadCondition] DONE ${Math.round(performance.now() - _t0)}ms (loading=false, audioGen=${state.audioGeneration})`);
 }
 
 // ---- Segment edits --------------------------------------------------------

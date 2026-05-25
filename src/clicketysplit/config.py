@@ -16,8 +16,8 @@ class DetectionConfig(BaseModel):
     backend: Literal["silero", "webrtc", "energy"] = "silero"
     vad_threshold: float = 0.5
     min_segment_ms: int = 150
-    min_silence_ms: int = 150
-    silence_margin_ms: int = 25
+    min_silence_ms: int = 300
+    silence_margin_ms: int = 60
     denoise: bool = True
 
 

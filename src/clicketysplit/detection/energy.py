@@ -38,7 +38,7 @@ class EnergyDetector:
         min_silence_ms: int = 150,
         silence_margin_ms: int = 25,
         frame_ms: int = 5,
-        energy_smoothing_ms: int = 15,
+        energy_smoothing_ms: int = 25,
         **_backend_specific: Any,
     ) -> DetectionResult:
         duration = len(audio) / sr
