@@ -1,23 +1,22 @@
-"""Bundled demo recording and stimulus list.
+"""Bundled demo experiment: two short recordings and their stimulus lists.
 
-The wheel ships a tiny (~30 s, ~10 word tokens, 16 kHz mono PCM_16)
-recording plus the stimulus list it covers. :func:`setup_demo_experiment`
-copies these into a fresh temp directory, writes a minimal
-``clicketysplit.json`` next to them, and returns the experiment root so
-callers (notably ``clicketysplit demo`` in :mod:`clicketysplit.cli`) can
-boot a server pointed at a working experiment without any user setup.
+The wheel ships two ~30-40 s clips of real lab-style speech — one of real
+words, one of pseudowords — so ``clicketysplit demo`` boots into a working
+two-condition experiment with zero user setup. Both clips are the package
+author's own voice, cut from recordings made for a phonetics experiment
+(speaker f3; see README.md here for provenance). Each word is repeated
+about twice in massed order, which is exactly the recording style the
+detector and auto-labeler were built for.
 
-The temp layout matches the canonical experiment layout from
-CONTRACT_NOTES C2::
+:func:`setup_demo_experiment` copies the assets into a fresh temp
+directory, writes a ``clicketysplit.json`` next to them, and returns the
+experiment root::
 
     <tmp>/
     ├── clicketysplit.json
-    ├── recordings/demo_speaker/demo_condition/rec.wav
-    └── stimulus_lists/demo.txt
-
-The demo uses ``presentation_order="random"`` on purpose
-(_design/07_TESTING_AND_DOCS.md §"Demo data"): the first thing a new user
-sees should not imply the tool requires blocked repetitions.
+    ├── recordings/demo_speaker/real_words/rec.wav
+    ├── recordings/demo_speaker/pseudowords/rec.wav
+    └── stimulus_lists/{real_words,pseudowords}.txt
 """
 
 from __future__ import annotations
@@ -39,16 +38,22 @@ from ..config import (
 __all__ = ["setup_demo_experiment"]
 
 
+# (condition name, bundled wav, bundled stimulus list)
+_DEMO_CONDITIONS: tuple[tuple[str, str, str], ...] = (
+    ("real_words", "demo_real_words.wav", "real_words.txt"),
+    ("pseudowords", "demo_pseudowords.wav", "pseudowords.txt"),
+)
+
+
 def _build_demo_config() -> ExperimentConfig:
     """Construct the in-memory ExperimentConfig for the demo experiment.
 
-    Defaults chosen for a zero-friction first run:
-
-    * ``detection.backend = "energy"`` — works without the silero/webrtc extras.
-    * ``detection.denoise = False`` — works without the noisereduce extra.
-    * ``labeling.min_word_duration_ms = 150`` — short TTS bursts (~150-600 ms)
-      still classify as ``"word"`` instead of being demoted to ``short_noise``.
-    * ``conditions[0].presentation_order = "random"`` — see module docstring.
+    * ``detection.backend = "silero"`` — a core dependency, so the demo
+      always runs the same detector a real experiment would.
+    * ``detection.denoise = False`` — the clips are already denoised, and
+      this keeps the demo working without the noisereduce extra.
+    * Both conditions are ``blocked`` (massed) with 2 expected repetitions,
+      matching how the source recordings were actually made.
     """
     return ExperimentConfig(
         schema_version=1,
@@ -59,13 +64,15 @@ def _build_demo_config() -> ExperimentConfig:
         speakers=[Speaker(id="demo_speaker")],
         conditions=[
             Condition(
-                name="demo_condition",
-                stimulus_list="stimulus_lists/demo.txt",
-                presentation_order="random",
+                name=cond_name,
+                stimulus_list=f"stimulus_lists/{stim_file}",
+                presentation_order="blocked",
+                expected_reps_per_stimulus=2,
             )
+            for cond_name, _wav, stim_file in _DEMO_CONDITIONS
         ],
-        detection=DetectionConfig(backend="energy", denoise=False),
-        labeling=LabelingConfig(min_word_duration_ms=150),
+        detection=DetectionConfig(backend="silero", denoise=False),
+        labeling=LabelingConfig(),
         export=ExportConfig(),
     )
 
@@ -73,40 +80,28 @@ def _build_demo_config() -> ExperimentConfig:
 def setup_demo_experiment() -> Path:
     """Copy the bundled demo assets to a temp dir and return its root.
 
-    The returned directory contains:
-
-    * ``clicketysplit.json`` — the config produced by :func:`_build_demo_config`.
-    * ``recordings/demo_speaker/demo_condition/rec.wav`` — a copy of the
-      bundled ``demo_recording.wav``.
-    * ``stimulus_lists/demo.txt`` — a copy of the bundled ``demo_stimuli.txt``.
-
     The caller owns the returned directory; nothing here cleans it up. The
     OS will reap it from the temp area on reboot, which is fine for the
     demo command's "throwaway sandbox" semantics.
     """
     pkg_dir = Path(__file__).parent
-    src_wav = pkg_dir / "demo_recording.wav"
-    src_stimuli = pkg_dir / "demo_stimuli.txt"
-    if not src_wav.is_file():
-        raise FileNotFoundError(
-            f"Bundled demo recording missing at {src_wav}. "
-            "The wheel may have been built without demo_assets/."
-        )
-    if not src_stimuli.is_file():
-        raise FileNotFoundError(
-            f"Bundled demo stimulus list missing at {src_stimuli}. "
-            "The wheel may have been built without demo_assets/."
-        )
+    for _cond, wav, stim in _DEMO_CONDITIONS:
+        for fname in (wav, stim):
+            if not (pkg_dir / fname).is_file():
+                raise FileNotFoundError(
+                    f"Bundled demo asset missing at {pkg_dir / fname}. "
+                    "The wheel may have been built without demo_assets/."
+                )
 
     tmp = Path(tempfile.mkdtemp(prefix="clicketysplit_demo_"))
 
-    rec_dir = tmp / "recordings" / "demo_speaker" / "demo_condition"
-    rec_dir.mkdir(parents=True)
-    shutil.copy(src_wav, rec_dir / "rec.wav")
-
     stim_dir = tmp / "stimulus_lists"
     stim_dir.mkdir()
-    shutil.copy(src_stimuli, stim_dir / "demo.txt")
+    for cond_name, wav, stim in _DEMO_CONDITIONS:
+        rec_dir = tmp / "recordings" / "demo_speaker" / cond_name
+        rec_dir.mkdir(parents=True)
+        shutil.copy(pkg_dir / wav, rec_dir / "rec.wav")
+        shutil.copy(pkg_dir / stim, stim_dir / stim)
 
     cfg = _build_demo_config()
     save_config(cfg, tmp / "clicketysplit.json")
