@@ -91,12 +91,17 @@ export function loadConfig(
 export function writeConfig(
   configDir: string,
   config: ExperimentConfig,
+  overwrite = false,
 ): Promise<{ status: "ok"; path: string }> {
   // Strip backend-injected fields before sending (the POST validator rejects
   // unknown top-level keys when pydantic is strict — even though our model
   // currently allows extras, prefer to send only declared fields).
   const { _experiment_path, _config_dir, ...rest } = config;
-  return jsonPost("/api/config", { config_dir: configDir, config: rest });
+  return jsonPost("/api/config", {
+    config_dir: configDir,
+    config: rest,
+    overwrite,
+  });
 }
 
 // ---- Discovery ------------------------------------------------------------
@@ -107,6 +112,13 @@ export function discoverRecordings(root: string): Promise<DiscoveryResult> {
 
 export function resolveBrowse(name: string): Promise<ResolveBrowseResponse> {
   return jsonPost<ResolveBrowseResponse>("/api/resolve_browse", { name });
+}
+
+export function pickFolder(opts?: {
+  initial_dir?: string;
+  title?: string;
+}): Promise<{ path: string | null }> {
+  return jsonPost<{ path: string | null }>("/api/pick_folder", opts ?? {});
 }
 
 // ---- Stimulus lists -------------------------------------------------------

@@ -11,7 +11,7 @@
   //          deselect-all and a per-row checkbox.
   //   - Bottom bar: condition summary + "Next: Export" button.
   //
-  // Defaults per CONTRACT_NOTES C4: when a condition first enters Select,
+  // Defaults: when a condition first enters Select,
   // every word-typed segment with status=='accepted' AND non-empty
   // assigned_name starts selected.
 
@@ -371,6 +371,10 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
+    /* Don't let groups shrink to fit the viewport — the .sel-body scrolls
+       instead. Without this, the column flex parent compresses each group
+       to ~0 height and `overflow: hidden` clips the rows to a sliver. */
+    flex-shrink: 0;
   }
 
   .sel-group-hdr {

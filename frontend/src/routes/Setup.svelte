@@ -4,9 +4,11 @@
     discoverRecordings,
     listStimulusLists,
     loadConfig as apiLoadConfig,
+    pickFolder,
     resolveBrowse,
     writeConfig,
   } from "../lib/api";
+  import { ApiError } from "../lib/types";
   import {
     rememberConfigPath,
     rememberRecordingsRoot,
@@ -80,16 +82,19 @@
   // parent (which is the typical experiment-dir layout); user can edit.
   let configDirInput = $state<string>("");
   let experimentName = $state<string>("");
+  // Where the per-pair detection / review / token outputs go. Relative
+  // to the config dir if not absolute. "output" is the v0.1 default.
+  let outputRootInput = $state<string>("output");
 
   // Sub-step 4: detection params (mirrors of the pydantic DetectionConfig
   // defaults; backend is filtered to available detectors).
   let detection = $state<DetectionConfig>({
-    backend: "energy",
+    backend: "silero",
     vad_threshold: 0.5,
     min_segment_ms: 150,
     min_silence_ms: 150,
     silence_margin_ms: 25,
-    denoise: false,
+    denoise: true,
   });
 
   // After save + detect_all: show a modal with per-pair results.
@@ -97,6 +102,41 @@
   let detectResults = $state<DetectAllResponse | null>(null);
 
   // ---- Helpers ------------------------------------------------------------
+
+  // Mirrors _normalize_wsl_path in routes.py. Cleans up paths pasted from
+  // Windows Explorer (UNC \\wsl.localhost\<distro>\foo\bar) into POSIX so
+  // the backend's Path joining works on Linux.
+  const UNC_WSL = /^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)$/i;
+  function normalizeWslPath(s: string): string {
+    s = s.trim();
+    if (!s) return s;
+    const m = UNC_WSL.exec(s);
+    if (m) return "/" + m[1].replaceAll("\\", "/");
+    if (s.includes("\\") && !s.startsWith("/")) return s.replaceAll("\\", "/");
+    return s;
+  }
+
+  function normalizeRecordingsRootOnBlur(): void {
+    const cleaned = normalizeWslPath(recordingsRootInput);
+    if (cleaned !== recordingsRootInput) recordingsRootInput = cleaned;
+  }
+
+  function normalizeConfigDirOnBlur(): void {
+    const cleaned = normalizeWslPath(configDirInput);
+    if (cleaned !== configDirInput) configDirInput = cleaned;
+  }
+
+  function normalizeOutputRootOnBlur(): void {
+    const cleaned = normalizeWslPath(outputRootInput);
+    if (cleaned !== outputRootInput) outputRootInput = cleaned;
+  }
+
+  function normalizeConditionStimulusListOnBlur(i: number): void {
+    const cleaned = normalizeWslPath(conditions[i].stimulus_list);
+    if (cleaned !== conditions[i].stimulus_list) {
+      conditions[i].stimulus_list = cleaned;
+    }
+  }
 
   function defaultConfigDirFromRoot(root: string): string {
     if (!root) return "";
@@ -123,18 +163,31 @@
       out.push({
         name: c,
         stimulus_list: "",
-        presentation_order: "random",
-        expected_reps_per_stimulus: 3,
+        presentation_order: "blocked",
+        expected_reps_per_stimulus: 2,
       });
     }
     return out;
   }
 
   function pickStimulusListFor(name: string): string {
-    // Prefer an exact "<name>.txt" match in the listed files, else leave
-    // blank so the user picks manually.
-    const wanted = `${name}.txt`.toLowerCase();
-    const match = stimulusListFiles.find((f) => f.toLowerCase() === wanted);
+    // Same matcher as the original tool's Auto-detect: exact "<name>.txt"
+    // first, then any file whose name contains the condition name, then any
+    // file containing every "_"-separated part of it (so condition
+    // "filler_word" matches "filler_word_stimuli.txt").
+    const cLow = name.toLowerCase();
+    const exact = stimulusListFiles.find(
+      (f) => f.toLowerCase() === `${cLow}.txt`,
+    );
+    const match =
+      exact ??
+      stimulusListFiles.find((f) => {
+        const sLow = f.toLowerCase();
+        return (
+          sLow.includes(cLow) ||
+          cLow.split("_").every((part) => sLow.includes(part))
+        );
+      });
     return match ? `${stimulusListsRoot}/${match}` : "";
   }
 
@@ -199,10 +252,24 @@
   }
 
   async function browseRecordingsRoot(): Promise<void> {
-    // Chromium: showDirectoryPicker returns a handle with .name and no path.
-    // Firefox/Safari: no such API; fall through to the hidden
-    // <input webkitdirectory> which lets the user pick a folder and exposes
-    // the folder name via the first File's webkitRelativePath.
+    // Prefer the server-side native folder picker (returns an absolute
+    // path — the whole point). Falls back to the browser-side pickers
+    // only if the server picker can't run (no display, etc.).
+    try {
+      const r = await pickFolder({
+        title: "Pick the recordings folder",
+        initial_dir: recordingsRootInput.trim() || undefined,
+      });
+      if (r.path) {
+        recordingsRootInput = r.path;
+        return;
+      }
+      // r.path is null = user cancelled OR no display. Treat cancel
+      // silently; if no display, the browser fallbacks below still try.
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("native pick_folder failed; falling back:", err);
+    }
     const win = window as unknown as {
       showDirectoryPicker?: () => Promise<{ name: string }>;
     };
@@ -219,6 +286,44 @@
       return;
     }
     if (browseFileInput) browseFileInput.click();
+  }
+
+  async function browseConfigDir(): Promise<void> {
+    try {
+      const r = await pickFolder({
+        title: "Pick the folder to save clicketysplit.json into",
+        initial_dir:
+          configDirInput.trim() ||
+          recordingsRootInput.trim() ||
+          undefined,
+      });
+      if (r.path) {
+        configDirInput = r.path;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("native pick_folder failed:", err);
+    }
+  }
+
+  async function browseOutputRoot(): Promise<void> {
+    try {
+      const r = await pickFolder({
+        title: "Pick the output folder (tokens + manifests land here)",
+        initial_dir:
+          outputRootInput.trim() && outputRootInput.startsWith("/")
+            ? outputRootInput.trim()
+            : configDirInput.trim() ||
+              recordingsRootInput.trim() ||
+              undefined,
+      });
+      if (r.path) {
+        outputRootInput = r.path;
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("native pick_folder failed:", err);
+    }
   }
 
   async function onBrowseFilesPicked(event: Event): Promise<void> {
@@ -258,11 +363,13 @@
       }));
       conditions = uniqueConditionsFromDiscovery(d);
 
-      // Discover already probed the conventional <root>/../stimulus_lists/
-      // sibling and returned any *.txt files it found, so the wizard can
-      // pre-fill stimulus-list paths on a fresh setup without needing a
-      // saved config first.
+      // Discover already probed a few conventional locations for
+      // stimulus_lists/ (sibling of recordings/, child of parent, etc.) and
+      // returned both the absolute root dir it found and any *.txt files in
+      // it. Use that root so pickStimulusListFor builds absolute paths the
+      // backend can resolve regardless of where the config dir ends up.
       stimulusListFiles = d.stimulus_list_files;
+      if (d.stimulus_lists_root) stimulusListsRoot = d.stimulus_lists_root;
       if (stimulusListFiles.length > 0) {
         for (const c of conditions) {
           if (!c.stimulus_list) c.stimulus_list = pickStimulusListFor(c.name);
@@ -309,7 +416,7 @@
       name: "",
       stimulus_list: "",
       presentation_order: "random",
-      expected_reps_per_stimulus: 3,
+      expected_reps_per_stimulus: 2,
     });
   }
 
@@ -360,14 +467,14 @@
       // experiment-relative.
       recordings_root: recordingsRootInput.trim(),
       stimulus_lists_root: stimulusListsRoot,
-      output_root: "output",
+      output_root: outputRootInput.trim() || "output",
       speakers: cfgSpeakers,
       conditions: cfgConditions,
       detection: { ...detection },
       labeling: {
-        min_word_duration_ms: 250,
+        min_word_duration_ms: 500,
         max_word_duration_ms: 1400,
-        drop_intro_block: false,
+        drop_intro_block: true,
       },
       export: {
         pad_ms: 20,
@@ -389,7 +496,27 @@
     detectResults = null;
     try {
       const cfg = buildExperimentConfig();
-      const saved = await writeConfig(configDir, cfg);
+      let saved: Awaited<ReturnType<typeof writeConfig>>;
+      try {
+        saved = await writeConfig(configDir, cfg);
+      } catch (err) {
+        // A clicketysplit.json already lives there and it isn't the one we
+        // loaded — make the user say so explicitly before replacing it.
+        if (err instanceof ApiError && err.code === "config_exists") {
+          const ok = window.confirm(
+            `${configDir}/clicketysplit.json already exists.\n\n` +
+              "Overwrite it? (Cancel keeps the existing file untouched — " +
+              "change the config directory to save elsewhere.)",
+          );
+          if (!ok) {
+            savingDetecting = false;
+            return;
+          }
+          saved = await writeConfig(configDir, cfg, true);
+        } else {
+          throw err;
+        }
+      }
       appState.config = cfg;
       appState.config._experiment_path = saved.path;
       appState.configPath = saved.path;
@@ -398,7 +525,7 @@
 
       // Kick off detection across every configured speaker × condition.
       // The backend blocks while detection runs — for a five-minute file
-      // that's a few seconds with the energy backend, longer with Silero.
+      // that is a few seconds of work per condition with Silero.
       const results = await apiDetectAll();
       detectResults = results;
       const okCount = results.results.filter((r) => r.status === "ok").length;
@@ -477,8 +604,8 @@
       <h2>Pick the recordings folder</h2>
       <p class="muted">
         Type or paste the absolute path to the folder that contains your
-        speaker subfolders. Browsers can't reliably hand a Flask backend an
-        absolute path, so the text field is the source of truth.
+        speaker subfolders (e.g. <code>/data/recordings</code> with
+        <code>f1/</code>, <code>f2/</code>… inside).
       </p>
       <div class="form-row">
         <input
@@ -486,6 +613,7 @@
           type="text"
           placeholder="/abs/path/to/recordings"
           bind:value={recordingsRootInput}
+          onblur={normalizeRecordingsRootOnBlur}
           spellcheck={false}
         />
         <button
@@ -601,6 +729,7 @@
                     class="inp"
                     type="text"
                     bind:value={conditions[i].stimulus_list}
+                    onblur={() => normalizeConditionStimulusListOnBlur(i)}
                     placeholder="stimulus_lists/condition_a.txt"
                     spellcheck={false}
                   />
@@ -610,11 +739,11 @@
                 <select
                   class="inp"
                   bind:value={conditions[i].presentation_order}
-                  title="random: user labels each token. cycled: labels walk forward A B C A B C… blocked: labels walk forward K-at-a-time."
+                  title="How the stimuli were presented, which decides how labels prefill: massed repeats each word K times before the next; spaced runs the whole list each round; random prefills nothing."
                 >
-                  <option value="random">Random</option>
-                  <option value="cycled">Cycled</option>
-                  <option value="blocked">Blocked</option>
+                  <option value="random">Random (no prefill)</option>
+                  <option value="cycled">Spaced (abc abc abc)</option>
+                  <option value="blocked">Massed (aaa bbb ccc)</option>
                 </select>
               </td>
               <td>
@@ -658,13 +787,37 @@
       <div class="form-row">
         <label class="lbl-wrap">
           <span class="lbl">Config directory (absolute)</span>
-          <input
-            class="inp"
-            type="text"
-            bind:value={configDirInput}
-            placeholder="/abs/path/to/experiment"
-            spellcheck={false}
-          />
+          <div style="display:flex; gap:0.4rem; align-items:stretch;">
+            <input
+              class="inp"
+              type="text"
+              bind:value={configDirInput}
+              onblur={normalizeConfigDirOnBlur}
+              placeholder="/abs/path/to/experiment"
+              spellcheck={false}
+              style="flex:1;"
+            />
+            <button class="btn" type="button" onclick={browseConfigDir}>
+              Browse…
+            </button>
+          </div>
+        </label>
+        <label class="lbl-wrap">
+          <span class="lbl">Output folder</span>
+          <div style="display:flex; gap:0.4rem; align-items:stretch;">
+            <input
+              class="inp"
+              type="text"
+              bind:value={outputRootInput}
+              onblur={normalizeOutputRootOnBlur}
+              placeholder="output  (relative to config dir, or absolute)"
+              spellcheck={false}
+              style="flex:1;"
+            />
+            <button class="btn" type="button" onclick={browseOutputRoot}>
+              Browse…
+            </button>
+          </div>
         </label>
         <label class="lbl-wrap">
           <span class="lbl">Experiment name (optional)</span>
@@ -702,11 +855,8 @@
               {#each appState.capabilities.detectors as d}
                 <option value={d}>{d}</option>
               {/each}
-              {#if appState.capabilities.detectors.length === 0}
-                <option value="energy">energy</option>
-              {/if}
             {:else}
-              <option value="energy">energy</option>
+              <option value="silero">silero</option>
             {/if}
           </select>
         </label>

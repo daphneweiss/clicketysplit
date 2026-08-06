@@ -1,6 +1,6 @@
 """Scan a recordings root and discover speakers/conditions.
 
-Per 02_CONFIG_AND_DISCOVERY.md §Discovery, this module walks a user-picked
+This module walks a user-picked
 directory and proposes the speakers/conditions/files the Setup Wizard
 should pre-fill. The scan is intentionally cheap — ``stat`` only, never
 read audio — and deterministic (sort by lowercase name throughout).
@@ -22,7 +22,6 @@ from pathlib import Path
 
 from .audio_io import SUPPORTED_EXTENSIONS
 
-
 __all__ = [
     "DiscoveryResult",
     "ScannedCondition",
@@ -32,7 +31,7 @@ __all__ = [
 
 
 # Reserved names that look like a speaker/condition but never are. These
-# match the output-tree layout in CONTRACT_NOTES C2 (``output/``,
+# match the canonical output-tree layout (``output/``,
 # ``tokens/``) plus the legacy pipeline's ``final``/``alternates`` dirs.
 _RESERVED_NAMES: frozenset[str] = frozenset(
     {"output", "tokens", "final", "alternates"}
@@ -90,11 +89,9 @@ def _is_skipped_name(name: str) -> bool:
     """Hidden/underscore-prefixed names and reserved output-tree names skip."""
     if not name:
         return True
-    if name.startswith(".") or name.startswith("_"):
+    if name.startswith((".", "_")):
         return True
-    if name.lower() in _RESERVED_NAMES:
-        return True
-    return False
+    return name.lower() in _RESERVED_NAMES
 
 
 def _is_audio_file(p: Path) -> bool:

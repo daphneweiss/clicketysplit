@@ -31,11 +31,12 @@ body {
   font-family: var(--font-ui);
   font-size: 14px;
   line-height: 1.4;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 #app {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
 }
@@ -158,7 +159,8 @@ label.lbl,
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-body {

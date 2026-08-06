@@ -4,7 +4,7 @@ Routes are HTTP-translation layers: they validate request shapes, call into
 the engine modules (``detection.pipeline``, ``export``, ``config``), and
 serialize results. No detection / export / IO logic lives here.
 
-Per CONTRACT_NOTES C1, the active experiment's path lives in
+The active experiment's path lives in
 ``app.config["experiment_path"]``; route handlers reach it via
 :func:`get_active_config` rather than module-level state.
 """
@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
+import sys
 import tempfile
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from flask import Flask, jsonify, request, send_file
 from pydantic import ValidationError
@@ -44,7 +48,6 @@ from ..export import (
 )
 from ..session import load_session, save_session
 from .app import ApiError, _invalidate_config_cache, get_active_config, safe_resolve
-
 
 __all__ = [
     "register_audio_routes",
@@ -140,7 +143,7 @@ def _filter_segments_by_selection(
         return [seg for _, seg in eligible]
 
     selected_sets: dict[str, set[int]] = {
-        name: set(int(i) for i in idxs) for name, idxs in selected_tokens.items()
+        name: {int(i) for i in idxs} for name, idxs in selected_tokens.items()
     }
     return [
         seg
@@ -404,15 +407,15 @@ def register_audio_routes(app: Flask) -> None:
             return response
 
         # Multiple sources, no denoised.wav: concatenate-on-the-fly into a
-        # NamedTemporaryFile and stream it. Per C1 the server is single-user,
-        # so a tmpfile-per-request is fine for v0.1.0.
+        # temp file and stream it. The server is single-user, so a
+        # tmpfile-per-request is fine. mkstemp (not NamedTemporaryFile)
+        # because the file has to outlive this scope — send_file streams it
+        # after we return.
         paths = [config._config_dir / s["path"] for s in sources]
         concat = concatenate(paths, silence_sec=0.5)
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=False, prefix="cs_working_"
-        )
-        tmp_path = Path(tmp.name)
-        tmp.close()
+        fd, tmp_name = tempfile.mkstemp(suffix=".wav", prefix="cs_working_")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         # Save via soundfile through audio_io's writer to keep formats consistent.
         from ..audio_io import save_audio
 
@@ -436,7 +439,7 @@ def _audio_mimetype(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Overview PNG (CONTRACT_NOTES C10 — its own route, NOT under /api/audio)
+# Overview PNG (its own route, NOT under /api/audio)
 # ---------------------------------------------------------------------------
 
 
@@ -563,7 +566,7 @@ def register_detect_routes(app: Flask) -> None:
 # per-experiment session JSON, and best-effort resolve a folder name handed
 # back by the File System Access API into an absolute path.
 #
-# Per CONTRACT_NOTES C6 the recordings root is a TEXT FIELD; resolve_browse
+# The recordings root is a TEXT FIELD; resolve_browse
 # is opportunistic help, never a contract. Empty matches → 200 with [], not
 # 404, so the wizard treats it as "user must type the path".
 # ---------------------------------------------------------------------------
@@ -594,41 +597,148 @@ def _scanned_speaker_to_dict(s: ScannedSpeaker, root: Path) -> dict[str, Any]:
     }
 
 
-def _probe_stimulus_list_candidates(recordings_root: Path) -> list[str]:
-    """List ``*.txt`` files in the conventional sibling ``stimulus_lists/`` dir.
+_PROBE_SKIP_DIR_NAMES = {
+    "__pycache__",
+    "node_modules",
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".idea",
+    ".vscode",
+    "dist",
+    "build",
+}
+
+
+def _probe_stimulus_list_candidates(
+    recordings_root: Path,
+) -> tuple[Path | None, list[str]]:
+    """Find a ``stimulus_lists/`` directory near ``recordings_root``.
 
     The wizard runs discovery before the config is saved, so the saved-config
     `/api/stimulus_lists` route can't answer yet. This probe lets the wizard
-    pre-fill stimulus-list paths on a fresh setup by looking where the
-    canonical layout (CONTRACT_NOTES C2) puts them: a sibling of
-    ``recordings/``. Returns ``[]`` if the sibling doesn't exist or isn't a
-    directory; the wizard treats that as "user types the path".
+    pre-fill stimulus-list paths on a fresh setup.
+
+    Search order (first hit wins):
+
+    1. ``recordings_root / "stimulus_lists"``
+    2. ``recordings_root.parent / "stimulus_lists"`` (sibling — the canonical
+       canonical experiment layout)
+    3. Any direct child of ``recordings_root.parent`` that itself contains a
+       ``stimulus_lists/`` directory (catches e.g.
+       ``<project>/experiment/stimulus_lists/``). Scans at most the first
+       50 child dirs and skips hidden/build/cache dirs.
+    4. ``recordings_root.parent.parent / "stimulus_lists"``
+
+    Returns ``(abs_dir_or_None, sorted_txt_filenames)``. If no directory is
+    found, returns ``(None, [])`` and the wizard prompts the user to type
+    the paths.
     """
-    stim_dir = recordings_root.parent / "stimulus_lists"
-    if not stim_dir.is_dir():
-        return []
-    return sorted(
-        entry.name
-        for entry in stim_dir.iterdir()
-        if entry.is_file()
-        and not entry.name.startswith(".")
-        and entry.suffix.lower() == ".txt"
-    )
+
+    def _list_txts(d: Path) -> list[str]:
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            return []
+        return sorted(
+            e.name
+            for e in entries
+            if e.is_file()
+            and not e.name.startswith(".")
+            and e.suffix.lower() == ".txt"
+        )
+
+    candidates: list[Path] = [
+        recordings_root / "stimulus_lists",
+        recordings_root.parent / "stimulus_lists",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate, _list_txts(candidate)
+
+    # 3. Direct children of recordings_root.parent that contain stimulus_lists/.
+    parent = recordings_root.parent
+    try:
+        children = list(parent.iterdir())
+    except OSError:
+        children = []
+    scanned = 0
+    for child in children:
+        if scanned >= 50:
+            break
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
+            continue
+        name = child.name
+        if name.startswith(".") or name in _PROBE_SKIP_DIR_NAMES:
+            continue
+        scanned += 1
+        nested = child / "stimulus_lists"
+        if nested.is_dir():
+            return nested, _list_txts(nested)
+
+    # 4. One level higher.
+    grandparent_candidate = recordings_root.parent.parent / "stimulus_lists"
+    if grandparent_candidate.is_dir():
+        return grandparent_candidate, _list_txts(grandparent_candidate)
+
+    return None, []
 
 
 def _discovery_result_to_dict(d: DiscoveryResult) -> dict[str, Any]:
+    abs_root, files = _probe_stimulus_list_candidates(d.root)
     return {
         "root": str(d.root),
         "speakers": [_scanned_speaker_to_dict(s, d.root) for s in d.speakers],
         "unique_condition_names": list(d.unique_condition_names),
-        "stimulus_list_files": _probe_stimulus_list_candidates(d.root),
+        "stimulus_list_files": files,
+        "stimulus_lists_root": str(abs_root) if abs_root else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# UNC / WSL path normalization
+#
+# When the user pastes a path from Windows Explorer into the wizard while
+# clicketysplit is running under WSL, they typically get something like
+# ``\\wsl.localhost\Ubuntu\home\daphn\dev\foo``. That string isn't absolute
+# on Linux, so Pydantic's ``_config_dir / Path(parts)`` ends up concatenating
+# it onto the experiment dir and ``validate_disk_refs`` fails. We normalize
+# UNC WSL paths to POSIX on the way in so the saved config is portable.
+# ---------------------------------------------------------------------------
+
+_UNC_WSL_RE = re.compile(r"^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)$", re.IGNORECASE)
+
+
+def _normalize_wsl_path(s: str) -> str:
+    r"""Convert ``\\wsl.localhost\<distro>\foo\bar`` → ``/foo/bar``.
+
+    Also flips remaining backslashes to forward slashes if the input looks
+    Windows-shaped (no leading ``/`` and contains ``\``). Returns the input
+    unchanged for normal POSIX paths.
+    """
+    s = s.strip()
+    if not s:
+        return s
+    m = _UNC_WSL_RE.match(s)
+    if m:
+        return "/" + m.group(1).replace("\\", "/")
+    if "\\" in s and not s.startswith("/"):
+        return s.replace("\\", "/")
+    return s
 
 
 def _resolve_abs_browse_candidates(name: str) -> list[Path]:
     """Search common ``$HOME`` locations for a directory named ``name``.
 
-    Best-effort assist for the wizard's "Browse" button (CONTRACT_NOTES C6).
+    Best-effort assist for the wizard's "Browse" button.
     The text field is the contract; this just makes typical layouts a
     one-click pre-fill instead of a paste. Unreadable directories are
     skipped silently.
@@ -693,7 +803,7 @@ def register_setup_routes(app: Flask) -> None:
     @app.route("/api/discover", methods=["POST"])
     def discover_route() -> Any:
         data = _json_body()
-        root_str = _require_str(data, "root")
+        root_str = _normalize_wsl_path(_require_str(data, "root"))
         # The wizard hands us a path the user typed (or pasted from the
         # opportunistic Browse helper). No experiment is loaded yet, so
         # safe_resolve doesn't apply — but we still need an absolute path.
@@ -734,7 +844,7 @@ def register_setup_routes(app: Flask) -> None:
         # the wizard's write here lets task 7's read/load route group stay
         # untouched (per task brief).
         data = _json_body()
-        config_dir_str = _require_str(data, "config_dir")
+        config_dir_str = _normalize_wsl_path(_require_str(data, "config_dir"))
         config_payload = data.get("config")
         if not isinstance(config_payload, dict):
             raise ApiError(
@@ -742,6 +852,20 @@ def register_setup_routes(app: Flask) -> None:
                 "Missing or invalid 'config' object in request body",
                 status=400,
             )
+
+        # Normalize any UNC/Windows-shaped path strings in the payload so
+        # downstream pydantic + disk-refs validation sees clean POSIX paths.
+        for key in ("recordings_root", "stimulus_lists_root"):
+            val = config_payload.get(key)
+            if isinstance(val, str):
+                config_payload[key] = _normalize_wsl_path(val)
+        conds = config_payload.get("conditions")
+        if isinstance(conds, list):
+            for cond in conds:
+                if isinstance(cond, dict):
+                    sl = cond.get("stimulus_list")
+                    if isinstance(sl, str):
+                        cond["stimulus_list"] = _normalize_wsl_path(sl)
 
         config_dir = Path(config_dir_str).expanduser()
         if not config_dir.is_absolute():
@@ -770,10 +894,26 @@ def register_setup_routes(app: Flask) -> None:
                 status=400,
             ) from exc
 
+        # Never silently clobber somebody's existing experiment config.
+        # If a clicketysplit.json already sits in config_dir and it isn't
+        # the one this server session has loaded, require the caller to
+        # opt in with overwrite=true (the wizard asks the user first).
+        config_path = (config_dir / "clicketysplit.json").resolve()
+        if (
+            config_path.is_file()
+            and not bool(data.get("overwrite", False))
+            and str(config_path) != (app.config.get("experiment_path") or "")
+        ):
+            raise ApiError(
+                "config_exists",
+                f"A clicketysplit.json already exists at {config_path}. "
+                "Pass overwrite=true to replace it.",
+                status=409,
+            )
+
         # Write to disk before phase 3 disk-refs check, per task brief:
         # the file IS written even if stimulus lists are missing, so the
         # wizard can iterate without re-typing every field.
-        config_path = (config_dir / "clicketysplit.json").resolve()
         save_config(cfg, config_path)
 
         # Phase 3: disk-refs check via load_config (mirrors the existing
@@ -848,6 +988,61 @@ def register_setup_routes(app: Flask) -> None:
         # Empty matches → 200 with [], NOT a 404; the wizard treats it as
         # "user must type the path" rather than as an error (C6).
         return jsonify({"matches": [str(p) for p in matches]})
+
+    @app.route("/api/pick_folder", methods=["POST"])
+    def pick_folder_route() -> Any:
+        # Server-side native folder picker. Beats the browser's
+        # showDirectoryPicker which only returns a folder NAME (C6). Runs
+        # tkinter in a subprocess so a stuck dialog can't tie up Flask.
+        # Requires a display (DISPLAY / WAYLAND_DISPLAY); on WSL2, WSLg
+        # supplies one by default.
+        data = _json_body() if request.data else {}
+        initial = data.get("initial_dir") if isinstance(data, dict) else None
+        title = data.get("title") if isinstance(data, dict) else None
+        path = _native_folder_picker(
+            initial_dir=initial if isinstance(initial, str) else None,
+            title=title if isinstance(title, str) else "Pick a folder",
+        )
+        return jsonify({"path": path})
+
+
+_NATIVE_PICKER_SCRIPT = """
+import sys, tkinter as tk
+from tkinter import filedialog
+r = tk.Tk()
+r.withdraw()
+r.attributes('-topmost', True)
+kwargs = {'title': sys.argv[1]}
+if len(sys.argv) > 2 and sys.argv[2]:
+    kwargs['initialdir'] = sys.argv[2]
+p = filedialog.askdirectory(**kwargs)
+sys.stdout.write(p or '')
+"""
+
+
+def _native_folder_picker(
+    initial_dir: str | None = None, title: str = "Pick a folder"
+) -> str | None:
+    """Pop a native folder dialog via tkinter in a subprocess.
+
+    Returns the chosen absolute path, or ``None`` on cancel / failure
+    (no display, tkinter missing, timeout, etc.). The wizard treats
+    ``None`` as "user types the path manually" — never raises.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", _NATIVE_PICKER_SCRIPT, title, initial_dir or ""],
+            capture_output=True,
+            text=True,
+            check=False,  # a non-zero exit just means "no folder picked"
+            timeout=300,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    path = (result.stdout or "").strip()
+    return path or None
 
 
 # ---------------------------------------------------------------------------
@@ -981,7 +1176,7 @@ def _run_export_one(
         except ValueError:
             csv_rel = str(csv_path)
 
-    # Optional TextGrid alongside proposed_segments.json (CONTRACT_NOTES C2).
+    # Optional TextGrid alongside proposed_segments.json.
     if config.export.produce_textgrid and HAS_PARSELMOUTH:
         # Reconstruct the file_boundaries the TextGrid wants from
         # proposed_segments.json (cheap; this is metadata, not audio).

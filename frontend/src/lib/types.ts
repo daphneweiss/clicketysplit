@@ -8,7 +8,7 @@
 // ---- Config ---------------------------------------------------------------
 
 export type PresentationOrder = "random" | "cycled" | "blocked";
-export type DetectorBackend = "silero" | "webrtc" | "energy";
+export type DetectorBackend = "silero" | "webrtc";
 export type AudioFormat = "wav" | "flac";
 
 export interface Speaker {
@@ -97,6 +97,7 @@ export interface DiscoveryResult {
   speakers: ScannedSpeaker[];
   unique_condition_names: string[];
   stimulus_list_files: string[];
+  stimulus_lists_root: string | null;
 }
 
 // ---- Segments -------------------------------------------------------------

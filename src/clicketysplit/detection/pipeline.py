@@ -5,9 +5,9 @@ backend, segment typing, and forward-walk auto-labeling into a single
 function that produces ``proposed_segments.json`` plus a sanity-check
 ``overview.png``. The Flask ``/api/detect`` route is a thin wrapper around
 :func:`detect_for_condition`; the route MUST NOT mutate module globals
-(see _design/00_OVERVIEW.md "What's wrong with the current code" #1).
+(detection stays importable without the server installed).
 
-Lives in ``detection/pipeline.py`` per 05_EXPORT.md §"Overview plot" — the
+The overview plot is generated here too — the
 overview is a *side product of detection*, not an export artifact, so it
 ships with the pipeline rather than the export module.
 """
@@ -27,14 +27,14 @@ from typing import TYPE_CHECKING, Any
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
 
-from ..audio_io import SUPPORTED_EXTENSIONS, concatenate, save_audio  # noqa: E402
-from ..denoise import HAS_NOISEREDUCE, denoise_audio  # noqa: E402
-from . import get_detector  # noqa: E402
-from .base import LabelAnchor, LabeledSegment  # noqa: E402
-from .labeling import auto_label, classify_segments  # noqa: E402
+from ..audio_io import SUPPORTED_EXTENSIONS, concatenate, save_audio
+from ..denoise import HAS_NOISEREDUCE, denoise_audio
+from . import get_detector
+from .base import LabelAnchor, LabeledSegment
+from .labeling import auto_label, classify_segments
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -117,7 +117,7 @@ def _resolve_audio_paths(
 ) -> list[Path]:
     """Find audio files for this speaker×condition, honoring flat layout.
 
-    Per 02_CONFIG_AND_DISCOVERY.md (the "flat layout" rule referenced by
+    Per the "flat layout" rule (referenced by
     the task brief): if the speaker subdir has no condition subdirectory
     but DOES contain audio files at its top level AND only one condition
     is configured, those files belong to that single condition. Discovery
@@ -172,13 +172,19 @@ def _relative_to_config(path: Path, config_dir: Path) -> str:
     (rare — only happens if the user pointed ``recordings_root`` at an
     absolute path outside the experiment dir). Forward slashes keep the
     written JSON portable across Windows / *nix machines (per
-    00_OVERVIEW.md #6: "no absolute paths leaking through" — moving the
+    "no absolute paths leaking through" — moving the
     experiment dir to another machine must just work).
     """
+    # Use .absolute() not .resolve(): if the user's recordings_root is a
+    # symlink pointing outside the experiment dir (common — recordings often
+    # live on a separate drive), resolve() follows the link and produces a
+    # path with ".." that the audio routes' safe_resolve() then refuses.
+    # absolute() keeps the apparent path through the symlink.
+    abs_path = path.absolute()
     try:
-        rel = path.resolve().relative_to(config_dir)
+        rel = abs_path.relative_to(config_dir)
     except ValueError:
-        rel = Path(os.path.relpath(path.resolve(), config_dir))
+        rel = Path(os.path.relpath(abs_path, config_dir))
     return rel.as_posix()
 
 
@@ -240,7 +246,7 @@ def plot_overview(
 ) -> None:
     """Save a single-panel RMS envelope + colored type bars to ``out_path``.
 
-    Minimal by design (05_EXPORT.md §"Overview plot"): time axis, RMS
+    Minimal by design: time axis, RMS
     envelope, colored bars tinted by ``segment_type`` (word=green,
     short_noise=gray, crosstalk=red, intro=yellow). No zoomed inset, no
     spectrogram, no waveform-on-top-of-energy. The file is saved
@@ -288,7 +294,7 @@ def detect_for_condition(
 ) -> ProposalResult:
     """Run the full detection pipeline for one speaker×condition.
 
-    Steps (per 03_AUDIO_AND_DETECTION.md §"Detection pipeline orchestration"):
+    Steps:
 
       1. Look up speaker + condition by id/name.
       2. Resolve audio file paths (condition subdir, falling back to flat

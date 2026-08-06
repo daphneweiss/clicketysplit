@@ -1,7 +1,7 @@
 """JSON load/save of in-progress review state.
 
 The Setup Wizard and the review UI persist their UI state to
-``<output_root>/.session.json`` (CONTRACT_NOTES C2 — per-experiment, NOT
+``<output_root>/.session.json`` (per-experiment, NOT
 per-condition). A second ``<output_root>/.session.autosave.json`` is
 written by the autosave path; on load the newer of the two wins.
 
@@ -21,7 +21,6 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any
-
 
 __all__ = [
     "latest_session_path",
@@ -80,7 +79,7 @@ def load_session(
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise ValueError(
+        raise TypeError(
             f"Session file {path} did not contain a JSON object "
             f"(got {type(data).__name__})."
         )

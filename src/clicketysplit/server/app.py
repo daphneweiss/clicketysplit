@@ -1,7 +1,7 @@
 """Flask app factory, error handling, path safety, and config caching.
 
 The app factory wires up routes from :mod:`.routes`, registers SPA static
-serving, and installs the structured-error handlers. Per CONTRACT_NOTES C1,
+serving, and installs the structured-error handlers. By design,
 the currently active experiment's absolute path lives in
 ``app.config["experiment_path"]``; route handlers reach for it via
 :func:`get_active_config`.
@@ -15,8 +15,10 @@ follow that pattern.
 from __future__ import annotations
 
 import functools
+import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from flask import Flask, jsonify, send_from_directory
 from werkzeug.wrappers import Response as WerkzeugResponse
@@ -89,18 +91,27 @@ def safe_resolve(experiment_dir: Path, *parts: str) -> Path:
             )
 
     base = experiment_dir.resolve()
-    candidate = (base / Path(*parts)).resolve() if parts else base
-    if candidate != base and base not in candidate.parents:
+    if not parts:
+        return base
+    joined = base / Path(*parts)
+    # Containment check on the APPARENT path (no symlink following). The
+    # per-part loop above already rejects ".." and absolute components, so
+    # the join cannot escape via URL-supplied path traversal. It can only
+    # escape if the user put a symlink inside their own experiment dir
+    # pointing elsewhere — common (recordings often live on another disk),
+    # and that's their call to make. Trust it.
+    apparent = Path(os.path.normpath(joined))
+    if apparent != base and base not in apparent.parents:
         raise ApiError(
             "path_outside_experiment",
-            f"Path {candidate} escapes experiment dir {base}",
+            f"Path {apparent} escapes experiment dir {base}",
             status=400,
         )
-    return candidate
+    return joined.resolve()
 
 
 # ---------------------------------------------------------------------------
-# Active config (CONTRACT_NOTES C1)
+# Active config (single source of truth: app.config)
 # ---------------------------------------------------------------------------
 
 
