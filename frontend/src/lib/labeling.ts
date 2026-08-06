@@ -9,9 +9,8 @@
 // WORD-TYPED segments. Non-word segments (`short_noise`, `crosstalk`,
 // `intro`) are never re-typed or relabeled by this routine.
 //
-// See _design/03_AUDIO_AND_DETECTION.md §Labeling for the algorithm and
-// worked examples. If the algorithm here ever disagrees with the JSON
-// vector file, the bug is in this port — match the Python output.
+// If the algorithm here ever disagrees with the JSON vector file, the
+// bug is in this port — match the Python output.
 //
 // This file is intentionally pure (no DOM, no fetch, no Svelte runes) so
 // it can run in vitest, in a Web Worker, or in the main UI without setup.
@@ -78,7 +77,7 @@ export interface AutoLabelOptions {
  * other fields (start/end/status/...) are copied through.
  *
  * Mirrors Python `auto_label(segments, stimulus_list, *,
- * presentation_order, expected_reps_per_stimulus=3, anchors=None)`.
+ * presentation_order, expected_reps_per_stimulus=2, anchors=None)`.
  */
 export function autoLabel(
   segments: readonly Segment[],
@@ -146,7 +145,7 @@ export function autoLabel(
       wIdx,
       anchors,
       stimulusList,
-      options.expectedRepsPerStimulus ?? 3,
+      options.expectedRepsPerStimulus ?? 2,
     );
   }
 
@@ -193,6 +192,77 @@ function walkCycled(
   }
 }
 
+/**
+ * Split word positions into `nStim` clusters at the largest gaps.
+ *
+ * Port of Python `_gap_clusters` (labeling.py), itself a transcription of the
+ * original tool's classify_and_label: speakers pause briefly between
+ * repetitions of the same word and longer when switching words, so the
+ * `nStim - 1` widest gaps are the word-switch points. Falls back to fixed
+ * `k`-sized chunks when there are too few gaps to split on.
+ *
+ * Returns clusters of word positions (indices into `wIdx`). Both sorts are
+ * stable in JS and Python, so tie behavior on equal gaps matches too.
+ */
+function gapClusters(
+  segments: readonly Segment[],
+  wIdx: readonly number[],
+  nStim: number,
+  k: number,
+): number[][] {
+  const nWords = wIdx.length;
+  const nSplits = nStim - 1;
+  if (nWords === 0) return [];
+  const range = (lo: number, hi: number): number[] =>
+    Array.from({ length: hi - lo }, (_, i) => lo + i);
+  if (nSplits <= 0) return [range(0, nWords)];
+
+  const gaps: Array<[number, number]> = [];
+  for (let wi = 1; wi < nWords; wi++) {
+    gaps.push([segments[wIdx[wi]].start - segments[wIdx[wi - 1]].end, wi]);
+  }
+
+  if (gaps.length < nSplits) {
+    const kk = Math.max(1, Math.floor(k));
+    const chunks: number[][] = [];
+    for (let i = 0; i < nWords; i += kk) {
+      chunks.push(range(i, Math.min(i + kk, nWords)));
+    }
+    return chunks;
+  }
+
+  const widest = [...gaps].sort((a, b) => b[0] - a[0]).slice(0, nSplits);
+  const splitPositions = widest.map((g) => g[1]).sort((a, b) => a - b);
+
+  const clusters: number[][] = [];
+  let prev = 0;
+  for (const sp of splitPositions) {
+    clusters.push(range(prev, sp));
+    prev = sp;
+  }
+  clusters.push(range(prev, nWords));
+  return clusters.filter((c) => c.length > 0);
+}
+
+/** Index of the cluster containing `wordPosition`, or null. */
+function clusterOf(clusters: number[][], wordPosition: number): number | null {
+  for (let cIdx = 0; cIdx < clusters.length; cIdx++) {
+    if (clusters[cIdx].includes(wordPosition)) return cIdx;
+  }
+  return null;
+}
+
+/**
+ * Label blocked repetitions by clustering on inter-token gaps.
+ *
+ * Line-for-line port of Python `_walk_blocked` (labeling.py). Consuming
+ * exactly `k` tokens per stimulus drifts irrecoverably when a speaker
+ * produces more or fewer repetitions than scripted, so cluster boundaries
+ * come from the recording's own timing and `k` is only the fallback hint.
+ * Anchors pin their whole cluster's stimulus; later clusters continue
+ * forward from there. Empty-label anchors blank their range through to the
+ * next anchor.
+ */
 function walkBlocked(
   segments: Segment[],
   wIdx: readonly number[],
@@ -202,39 +272,58 @@ function walkBlocked(
 ): void {
   const nWords = wIdx.length;
   const nStim = stimulusList.length;
-  const reps = Math.max(1, Math.floor(k));
+  if (nWords === 0 || nStim === 0) return;
 
+  const clusters = gapClusters(segments, wIdx, nStim, k);
+  if (clusters.length === 0) return;
+
+  const anchoredPositions = new Set(
+    anchors.filter((a) => a.label !== "").map((a) => a.word_index),
+  );
+
+  // An anchor re-pins the stimulus for its cluster; clusters after it walk
+  // forward from that new position.
+  const anchorByCluster = new Map<number, number>();
+  for (const a of anchors) {
+    if (a.label === "" || !stimulusList.includes(a.label)) continue;
+    const cIdx = clusterOf(clusters, a.word_index);
+    if (cIdx !== null) anchorByCluster.set(cIdx, stimulusList.indexOf(a.label));
+  }
+
+  let stimIdx = anchorByCluster.get(0) ?? 0;
+  for (let cIdx = 0; cIdx < clusters.length; cIdx++) {
+    const pinned = anchorByCluster.get(cIdx);
+    if (pinned !== undefined) stimIdx = pinned;
+
+    const name = stimIdx >= 0 && stimIdx < nStim ? stimulusList[stimIdx] : "";
+    const cluster = clusters[cIdx];
+    for (let tokenPos = 0; tokenPos < cluster.length; tokenPos++) {
+      const seg = segments[wIdx[cluster[tokenPos]]];
+      seg.assigned_name = name;
+      seg.label_source = anchoredPositions.has(cluster[tokenPos])
+        ? "anchor"
+        : "auto";
+      seg.token_index = tokenPos + 1;
+      seg.cluster_size = cluster.length;
+    }
+
+    stimIdx++;
+  }
+
+  // Empty-label anchors halt forward labeling: every word from the anchor's
+  // index up to the next anchor stays blank. Applied last so the cluster
+  // assignment above cannot overwrite the halted range.
   for (let aPos = 0; aPos < anchors.length; aPos++) {
     const a = anchors[aPos];
-    if (a.label === "") continue;
-
-    const baseStimIdx = stimulusList.indexOf(a.label);
-    if (baseStimIdx < 0) continue;
-
-    const nextAWi =
-      aPos + 1 < anchors.length ? anchors[aPos + 1].word_index : null;
-
-    // The anchored token is rep 1 of base_stim (per Python implementation).
-    let currentStimIdx = baseStimIdx;
-    let count = 1;
-
-    for (let wi = a.word_index + 1; wi < nWords; wi++) {
-      if (nextAWi !== null && wi >= nextAWi) break;
-      const segIdx = wIdx[wi];
-      if (nextAWi !== null) {
-        // Between anchors: hold the anchor's stimulus the whole way.
-        segments[segIdx].assigned_name = a.label;
-        segments[segIdx].label_source = "auto";
-        continue;
-      }
-
-      if (count >= reps) {
-        currentStimIdx = (currentStimIdx + 1) % nStim;
-        count = 0;
-      }
-      segments[segIdx].assigned_name = stimulusList[currentStimIdx];
-      segments[segIdx].label_source = "auto";
-      count++;
+    if (a.label !== "") continue;
+    const haltEnd =
+      aPos + 1 < anchors.length ? anchors[aPos + 1].word_index : nWords;
+    for (let wp = a.word_index; wp < haltEnd; wp++) {
+      const seg = segments[wIdx[wp]];
+      seg.assigned_name = "";
+      seg.label_source = wp === a.word_index ? "anchor" : "";
+      seg.token_index = 0;
+      seg.cluster_size = 0;
     }
   }
 }

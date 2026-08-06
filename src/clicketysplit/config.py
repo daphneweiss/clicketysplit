@@ -1,7 +1,7 @@
 """Experiment configuration schema and load/save helpers.
 
 Pydantic v2 models for ``clicketysplit.json`` plus a three-phase
-``load_config`` (per CONTRACT_NOTES C5) and a matching ``save_config``.
+``load_config`` and a matching ``save_config``.
 """
 
 from __future__ import annotations
@@ -13,18 +13,22 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class DetectionConfig(BaseModel):
-    backend: Literal["silero", "webrtc", "energy"] = "silero"
+    backend: Literal["silero", "webrtc"] = "silero"
     vad_threshold: float = 0.5
     min_segment_ms: int = 150
-    min_silence_ms: int = 300
-    silence_margin_ms: int = 60
+    # Matches the legacy stim_pipeline defaults that produced good results
+    # on real recordings (MIN_SILENCE_MS=150, SILENCE_MARGIN_MS=25).
+    min_silence_ms: int = 150
+    silence_margin_ms: int = 25
     denoise: bool = True
 
 
 class LabelingConfig(BaseModel):
-    min_word_duration_ms: int = 250
+    # Legacy stim_pipeline defaults (WORD_DUR_MIN_MS=500, WORD_DUR_MAX_MS=1400),
+    # tuned on real lab recordings. Intro-block detection was always on there.
+    min_word_duration_ms: int = 500
     max_word_duration_ms: int = 1400
-    drop_intro_block: bool = False
+    drop_intro_block: bool = True
 
 
 class ExportConfig(BaseModel):
@@ -49,8 +53,12 @@ class Speaker(BaseModel):
 class Condition(BaseModel):
     name: str
     stimulus_list: str
-    presentation_order: Literal["random", "cycled", "blocked"] = "random"
-    expected_reps_per_stimulus: int = 3
+    # "blocked" = massed (aaa bbb ccc); "cycled" = spaced (abc abc abc);
+    # "random" = no predictable order, nothing prefilled. Massed is the
+    # default — it's how these recordings are actually made.
+    presentation_order: Literal["random", "cycled", "blocked"] = "blocked"
+    # Legacy default was 2 repetitions per word.
+    expected_reps_per_stimulus: int = 2
 
 
 class ExperimentConfig(BaseModel):
@@ -66,7 +74,7 @@ class ExperimentConfig(BaseModel):
     export: ExportConfig = Field(default_factory=ExportConfig)
 
     # Set by load_config() after pydantic validation; never serialized.
-    # See CONTRACT_NOTES C5: pydantic validators cannot use this because
+    # Pydantic validators cannot use this because
     # they run before _config_dir exists.
     _config_dir: Path | None = PrivateAttr(default=None)
 
@@ -84,7 +92,7 @@ class ExperimentConfig(BaseModel):
         """Filesystem-touching validation: every condition's stimulus_list must
         resolve to an existing, non-empty file.
 
-        Not a pydantic ``@model_validator`` on purpose (CONTRACT_NOTES C5):
+        Not a pydantic ``@model_validator`` on purpose:
         pydantic validators run during ``model_validate_json``, before
         ``_config_dir`` is set, so they would always see ``None`` and no-op.
         Call this explicitly from ``load_config`` after the dir is anchored.
@@ -113,7 +121,7 @@ class ExperimentConfig(BaseModel):
 
 
 def load_config(path: Path) -> ExperimentConfig:
-    """Three-phase load (CONTRACT_NOTES C5):
+    """Three-phase load:
 
     1. Pydantic schema validation from JSON text.
     2. Anchor ``_config_dir`` to ``path.parent``.

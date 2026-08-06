@@ -1,6 +1,6 @@
 """Core dataclasses, anchor type, and the Detector Protocol.
 
-Per CONTRACT_NOTES C4 the canonical segment status field is ``status``; there
+The canonical segment status field is ``status``; there
 is no separate ``accepted`` boolean. Export's "is this segment selected by
 default" rule is: word-typed AND ``status == "accepted"`` AND non-empty
 ``assigned_name``. Other modules (export in particular) import these types
@@ -36,8 +36,7 @@ class ProposedSegment:
 class LabeledSegment(ProposedSegment):
     """A typed and (optionally) auto-labeled segment.
 
-    Field defaults match the schema in 03_AUDIO_AND_DETECTION.md and the
-    CONTRACT_NOTES C4 status terminology. ``token_index`` and ``cluster_size``
+    ``token_index`` and ``cluster_size``
     are placeholders here; the export step fills them in.
     """
 

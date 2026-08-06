@@ -8,6 +8,8 @@ asked for an unavailable backend, and ``KeyError`` for an unknown name.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .base import (
     DetectionResult,
     Detector,
@@ -15,7 +17,6 @@ from .base import (
     LabeledSegment,
     ProposedSegment,
 )
-from .energy import EnergyDetector
 from .labeling import auto_label, classify_segments
 from .refinement import compute_energy_envelope, refine_boundary
 from .silero import SileroDetector
@@ -24,7 +25,6 @@ from .webrtc import WebRTCDetector
 __all__ = [
     "DetectionResult",
     "Detector",
-    "EnergyDetector",
     "LabelAnchor",
     "LabeledSegment",
     "ProposedSegment",
@@ -39,10 +39,13 @@ __all__ = [
 ]
 
 
-_REGISTRY: dict[str, type[Detector]] = {
+# Values are detector CLASSES. Not `type[Detector]`: Detector is a Protocol,
+# and mypy rejects concrete classes there because a Protocol type isn't
+# instantiable. The three uses below (is_available, requires_extras, and
+# calling it) are covered by the Detector protocol on the returned instance.
+_REGISTRY: dict[str, Any] = {
     "silero": SileroDetector,
     "webrtc": WebRTCDetector,
-    "energy": EnergyDetector,
 }
 
 
