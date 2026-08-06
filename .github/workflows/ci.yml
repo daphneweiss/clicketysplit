@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   python:
@@ -33,7 +34,6 @@ jobs:
         run: ruff check src/ tests/
 
       - name: Type-check (mypy)
-        continue-on-error: true
         run: mypy src/clicketysplit
 
       - name: Test (pytest)
@@ -64,11 +64,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev,all]'
 
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check frontend (svelte-check)
+        working-directory: frontend
+        run: npm run check
+
+      - name: Test frontend (vitest — includes the Python/TS labeling parity vectors)
+        working-directory: frontend
+        run: npm run test
+
       - name: Build frontend
         working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+        run: npm run build
 
       - name: Verify bundled static index.html exists on disk
         run: |

@@ -24,8 +24,12 @@ ENV/
 src/clicketysplit/_version.py
 
 # Pre-built frontend assets bundled into the wheel
-# (built by `npm run build` from frontend/; never commit the output)
-src/clicketysplit/server/static/
+# (built by `npm run build` from frontend/; never commit the output).
+# The DIRECTORY itself is tracked via .gitkeep: pyproject's force-include
+# requires it to exist, so without it `pip install -e .` fails on a fresh
+# clone before the frontend has ever been built.
+src/clicketysplit/server/static/*
+!src/clicketysplit/server/static/.gitkeep
 
 # --- Testing & coverage ---
 .pytest_cache/
@@ -52,6 +56,9 @@ frontend/.vite/
 
 # --- mkdocs ---
 site/
+
+# --- Local AI tooling state (permissions etc.) ---
+.claude/
 
 # --- Editors & OS ---
 .vscode/
