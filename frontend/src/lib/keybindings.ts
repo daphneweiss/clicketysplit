@@ -84,10 +84,11 @@ export interface ReviewHotkeyActions {
   next: () => void;
   toggleAddMode: () => void;
   cancelAddOrModal: () => void;
+  focusLabel: () => void;
 }
 
 /**
- * Build the review-step hotkey map per 06_FRONTEND.md keymap.
+ * Build the review-step hotkey map.
  *
  * Single-letter bindings (R/S/A) are suppressed while a typing target
  * has focus so the user can type those letters into a label. Tab, Enter,
@@ -95,6 +96,12 @@ export interface ReviewHotkeyActions {
  */
 export function buildReviewHotkeys(actions: ReviewHotkeyActions): HotkeyMap {
   return {
+    // The original tool binds BOTH Space and Tab to play (index.html:1354-1355);
+    // hours of muscle memory live on Space.
+    " ": (e) => {
+      e.preventDefault();
+      actions.play();
+    },
     Tab: (e) => {
       e.preventDefault();
       actions.play();
@@ -117,6 +124,14 @@ export function buildReviewHotkeys(actions: ReviewHotkeyActions): HotkeyMap {
     },
     a: () => actions.toggleAddMode(),
     A: () => actions.toggleAddMode(),
+    l: (e) => {
+      e.preventDefault();
+      actions.focusLabel();
+    },
+    L: (e) => {
+      e.preventDefault();
+      actions.focusLabel();
+    },
     Escape: () => actions.cancelAddOrModal(),
   };
 }

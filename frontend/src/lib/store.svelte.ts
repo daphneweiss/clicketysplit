@@ -1,6 +1,6 @@
 // Central Svelte 5 runes-based store.
 //
-// Per 06_FRONTEND.md §Central store, everything that needs to be reactive
+// Everything that needs to be reactive
 // across components lives in `state`. Components import `state`,
 // `activeCondState`, `currentSegment` and mutate via the action functions
 // below — no other source of truth.
@@ -51,6 +51,14 @@ export interface ConditionReviewState {
   expectedRepsPerStimulus: number;
   stimulusList: string[];
   currentTokenIndex: number;
+  /** Expected position in stimulusList for label suggestions — a port of
+   * the original tool's stimCursor/stimRepCount (index.html rvAccept):
+   * accepting a label found at-or-after the cursor moves the cursor just
+   * past it; a label NOT found there (an extra repetition, or a word
+   * already finished) leaves it alone, so the next word still gets its
+   * full expected count. Reject and skip never touch it. */
+  stimCursor: number;
+  stimRepCount: number;
   zoom: { startSec: number; endSec: number };
   dirty: boolean;
   /** Indices of segments whose tentative label changed in the last
@@ -112,7 +120,7 @@ export interface AppState {
    * Export step (task 11): which tokens the user has marked for export,
    * indexed spk → cond → assigned_name → tokenIndex-within-label (1-based) → bool.
    *
-   * Per CONTRACT_NOTES C4, defaults derive lazily the first time a
+   * Defaults derive lazily the first time a
    * condition is entered in Select: every word-typed segment with
    * `status == "accepted"` AND non-empty `assigned_name` starts selected.
    * Other word-typed segments (pending/rejected) are visible and
@@ -378,6 +386,7 @@ export async function loadCondition(
   spk: string,
   cond: string,
   force = false,
+  fallbackToDetected = true,
 ): Promise<void> {
   if (!state.config) {
     pushToast("Load an experiment first", "warn");
@@ -411,10 +420,12 @@ export async function loadCondition(
     state.reviewProgress[spk]![cond] = {
       segments: [],
       labelAnchors: [],
-      presentationOrder: "random",
-      expectedRepsPerStimulus: 3,
+      presentationOrder: "blocked",
+      expectedRepsPerStimulus: 2,
       stimulusList: [],
       currentTokenIndex: 0,
+      stimCursor: 0,
+      stimRepCount: 0,
       zoom: { startSec: 0, endSec: 1 },
       dirty: false,
       diffFlashWordIndices: [],
@@ -438,11 +449,29 @@ export async function loadCondition(
     if (err instanceof ApiError && err.status === 404) {
       condState.loadError =
         "No segments found — run detection in the Setup step first.";
+      // A stale session can point at a condition that was never detected
+      // (or a different experiment entirely). Rather than dead-ending on
+      // "no segments", fall back to the first speaker × condition that
+      // actually has segments on disk. loadCondition swallows errors, so
+      // success is judged by the resulting state, not by throw/no-throw.
+      if (fallbackToDetected && state.config) {
+        for (const s of state.config.speakers) {
+          for (const c of state.config.conditions) {
+            if (s.id === spk && c.name === cond) continue;
+            await loadCondition(s.id, c.name, false, false);
+            const st = state.reviewProgress[s.id]?.[c.name];
+            if (st && st.segments.length > 0 && !st.loadError) return;
+          }
+        }
+        toastError(err, "Failed to load segments");
+      }
+      // Quiet on fallback scans: one summary toast at the top level is
+      // enough; per-condition 404 toasts would spam the corner.
     } else {
       condState.loadError =
         err instanceof Error ? err.message : "Failed to load segments";
+      toastError(err, "Failed to load segments");
     }
-    toastError(err, "Failed to load segments");
     return;
   }
 
@@ -775,6 +804,23 @@ export function removeToken(segmentIdx: number): void {
   scheduleSegmentsSave();
 }
 
+/**
+ * Update `expectedRepsPerStimulus` for the active condition and re-walk
+ * auto-labels through every existing anchor. Lets the user say "actually
+ * this speaker mostly said things twice, redo the labels" mid-review
+ * without re-running detection.
+ */
+export function setExpectedReps(reps: number): void {
+  const cond = activeCondState();
+  if (!cond) return;
+  const safe = Math.max(1, Math.floor(reps));
+  if (cond.expectedRepsPerStimulus === safe) return;
+  cond.expectedRepsPerStimulus = safe;
+  projectAnchors(cond);
+  cond.dirty = true;
+  scheduleSegmentsSave();
+}
+
 export function setCurrentTokenIndex(segmentIdx: number): void {
   const cond = activeCondState();
   if (!cond) return;
@@ -801,6 +847,65 @@ export function setZoom(startSec: number, endSec: number): void {
 }
 
 /** Advance to the next word-typed segment (wraps to end-of-list inert). */
+/**
+ * Advance the stimulus cursor after an accept — port of the original
+ * rvAccept (index.html:1201-1218). Case-insensitive search for the accepted
+ * label at-or-after the cursor: found ahead → jump to it; found at the
+ * cursor → count a repetition and advance when expectedRepsPerStimulus is
+ * reached; not found (extra rep / word already passed) → cursor unchanged.
+ */
+export function advanceCursorOnAccept(label: string): void {
+  const cond = activeCondState();
+  if (!cond || cond.stimulusList.length === 0) return;
+  const accepted = label.trim().toLowerCase();
+  if (!accepted) return;
+  const labelIdx = cond.stimulusList.findIndex(
+    (w, i) => i >= cond.stimCursor && w.toLowerCase() === accepted,
+  );
+  if (labelIdx > cond.stimCursor) {
+    cond.stimCursor = labelIdx;
+    cond.stimRepCount = 0;
+  }
+  if (labelIdx >= cond.stimCursor && labelIdx >= 0) {
+    cond.stimRepCount++;
+    if (cond.stimRepCount >= Math.max(1, cond.expectedRepsPerStimulus)) {
+      cond.stimCursor++;
+      cond.stimRepCount = 0;
+    }
+  }
+  // Not found at or after the cursor: leave both untouched.
+}
+
+/**
+ * Step the stimulus cursor back when navigating to the previous token —
+ * port of the original rvPrev (index.html:1232-1246). Only adjusts when the
+ * token being left was accepted and matches the cursor's current or
+ * previous word.
+ */
+export function stepCursorBackOnPrev(): void {
+  const cond = activeCondState();
+  if (!cond || cond.stimulusList.length === 0) return;
+  const seg = cond.segments[cond.currentTokenIndex];
+  if (!seg || seg.status !== "accepted") return;
+  const name = (seg.assigned_name ?? "").toLowerCase();
+  const list = cond.stimulusList;
+  const currentWord =
+    cond.stimCursor < list.length
+      ? list[cond.stimCursor]
+      : cond.stimCursor > 0
+        ? list[cond.stimCursor - 1]
+        : "";
+  if (cond.stimRepCount > 0 && name === currentWord.toLowerCase()) {
+    cond.stimRepCount--;
+  } else if (
+    cond.stimCursor > 0 &&
+    name === list[cond.stimCursor - 1].toLowerCase()
+  ) {
+    cond.stimCursor--;
+    cond.stimRepCount = Math.max(0, cond.expectedRepsPerStimulus - 1);
+  }
+}
+
 export function nextWordSegment(): void {
   const cond = activeCondState();
   if (!cond) return;
@@ -878,7 +983,7 @@ let _sessionInflight = false;
 /**
  * Schedule a debounced session save. Anything in `state` that should survive
  * a reload (step, active speaker/condition, last roots) is bundled into the
- * payload. Per CONTRACT_NOTES C1 / 02 doc, this writes to `.session.json`
+ * payload. This writes to `.session.json`
  * on disk inside the experiment's output_root. No-op until a config is
  * loaded.
  */
@@ -988,7 +1093,7 @@ function deserializeSelections(raw: unknown): void {
 //
 //   spk → cond → assigned_name → tokenIndex (1-based within that label) → bool
 //
-// Per CONTRACT_NOTES C4, the default-selected set is "every word-typed
+// The default-selected set is "every word-typed
 // segment with status=='accepted' AND non-empty assigned_name". This is
 // computed lazily: the first time a condition's segments are available AND
 // the user enters Select for that pair, we walk the segments and populate

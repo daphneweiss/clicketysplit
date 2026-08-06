@@ -3,17 +3,21 @@
   import ConditionTabs from "../components/ConditionTabs.svelte";
   import TokenList from "../components/TokenList.svelte";
   import WaveformView from "../components/WaveformView.svelte";
+  import SpectrogramView from "../components/SpectrogramView.svelte";
   import {
     activeCondState,
+    advanceCursorOnAccept,
     clearAnchor,
     loadCondition,
     nextWordSegment,
     prevWordSegment,
     pushToast,
     setActive,
+    setExpectedReps,
     setLabel,
     setStatus,
     state as appState,
+    stepCursorBackOnPrev,
   } from "../lib/store.svelte";
   import { play, stop, subscribePlayback } from "../lib/audio";
   import { getAudioCache } from "../lib/store.svelte";
@@ -32,6 +36,7 @@
   let dropdownOpen = $state(false);
   let dropdownIndex = $state(-1);
   let waveformView: WaveformView | undefined = $state();
+  let addStartSec = $state<number | null>(null);
   let isPlaying = $state(false);
 
   // Derived ----------------------------------------------------------------
@@ -86,10 +91,36 @@
   }
 
   // Sync label draft with the current segment when navigation changes it.
+  // Prefill precedence ports the original showCurrentToken
+  // (index.html:720-733): a reviewed segment shows its own label; else a
+  // label that's actually in the stimulus list stands; else the cursor's
+  // predicted next stimulus; else whatever the segment has.
   $effect(() => {
     void currentSeg?.assigned_name;
     void cond?.currentTokenIndex;
-    labelDraft = currentSeg?.assigned_name ?? "";
+    const name = currentSeg?.assigned_name ?? "";
+    if (!cond || !currentSeg) {
+      labelDraft = name;
+    } else if (
+      currentSeg.status === "accepted" ||
+      currentSeg.status === "rejected"
+    ) {
+      labelDraft = name;
+    } else if (
+      name &&
+      cond.stimulusList.some(
+        (s) => s.toLowerCase() === name.trim().toLowerCase(),
+      )
+    ) {
+      labelDraft = name;
+    } else if (
+      cond.stimulusList.length > 0 &&
+      cond.stimCursor < cond.stimulusList.length
+    ) {
+      labelDraft = cond.stimulusList[cond.stimCursor];
+    } else {
+      labelDraft = name;
+    }
     dropdownIndex = -1;
     dropdownOpen = false;
   });
@@ -147,9 +178,25 @@
   function commitLabelAndAccept(): void {
     if (!cond || !currentSeg) return;
     const text = labelDraft.trim();
+    if (!text) {
+      pushToast("Enter a label first", "warn");
+      focusLabel();
+      return;
+    }
+    // Validate against the stimulus list, case-insensitively — same rule
+    // as the original rvAccept (index.html:1181-1186).
+    if (
+      cond.stimulusList.length > 0 &&
+      !cond.stimulusList.some((w) => w.toLowerCase() === text.toLowerCase())
+    ) {
+      pushToast("Invalid name — must be from stimulus list", "warn");
+      focusLabel();
+      return;
+    }
     // Persist label edit even if unchanged so the anchor is recorded.
     setLabel(cond.currentTokenIndex, text);
     setStatus(cond.currentTokenIndex, "accepted");
+    advanceCursorOnAccept(text);
     nextWordSegment();
   }
 
@@ -171,6 +218,21 @@
     addMode = false;
   }
 
+  function focusLabel(): void {
+    if (!labelInput) return;
+    labelInput.focus();
+    labelInput.select();
+  }
+
+  function blurLabelToWaveform(): void {
+    if (!labelInput) return;
+    if (document.activeElement === labelInput) {
+      labelInput.blur();
+    }
+    // Hand focus back to the waveform so subsequent hotkeys fire.
+    waveformView?.focus?.();
+  }
+
   function pickSuggestion(name: string): void {
     labelDraft = name;
     dropdownOpen = false;
@@ -180,6 +242,14 @@
   }
 
   function onLabelInput(): void {
+    dropdownOpen = suggestions.length > 0;
+    dropdownIndex = -1;
+  }
+
+  function onLabelFocus(): void {
+    // Auto-select on focus so typing replaces the current label without
+    // requiring Ctrl+A. Applies whether focus came from L, click, or Tab.
+    labelInput?.select();
     dropdownOpen = suggestions.length > 0;
     dropdownIndex = -1;
   }
@@ -203,12 +273,32 @@
         e.stopPropagation();
         dropdownOpen = false;
         dropdownIndex = -1;
+      } else {
+        // Leave edit mode: hand focus back to the waveform so single-letter
+        // hotkeys (R/S/A/L) fire again.
+        e.preventDefault();
+        e.stopPropagation();
+        blurLabelToWaveform();
       }
     } else if (e.key === "Enter") {
       if (dropdownOpen && dropdownIndex >= 0) {
         e.preventDefault();
         e.stopPropagation();
         labelDraft = suggestions[dropdownIndex];
+        dropdownOpen = false;
+        dropdownIndex = -1;
+        return;
+      }
+      // First Enter while typing completes to the top fuzzy match if the
+      // current draft doesn't already exactly match it. Second Enter (now
+      // matching) bubbles to the global accept binding.
+      if (
+        suggestions.length > 0 &&
+        labelDraft.trim() !== suggestions[0]
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        labelDraft = suggestions[0];
         dropdownOpen = false;
         dropdownIndex = -1;
       }
@@ -232,7 +322,7 @@
     e.preventDefault();
     // Right-click on the current token to clear its anchor.
     clearAnchor(cond.currentTokenIndex);
-    pushToast("Anchor cleared", "info", 1500);
+    pushToast("Reverted to automatic label", "info", 1500);
   }
 
   // Hotkeys ----------------------------------------------------------------
@@ -242,13 +332,30 @@
     offHotkeys = registerHotkeys(
       buildReviewHotkeys({
         play: playCurrent,
-        accept: commitLabelAndAccept,
-        reject: rejectCurrent,
-        skip: skipCurrent,
-        prev: prevWordSegment,
-        next: nextWordSegment,
+        accept: () => {
+          commitLabelAndAccept();
+          blurLabelToWaveform();
+        },
+        reject: () => {
+          rejectCurrent();
+          blurLabelToWaveform();
+        },
+        skip: () => {
+          skipCurrent();
+          blurLabelToWaveform();
+        },
+        prev: () => {
+          stepCursorBackOnPrev();
+          prevWordSegment();
+          blurLabelToWaveform();
+        },
+        next: () => {
+          nextWordSegment();
+          blurLabelToWaveform();
+        },
         toggleAddMode,
         cancelAddOrModal,
+        focusLabel,
       }),
       { typingFieldAllowlist: REVIEW_TYPING_ALLOWLIST },
     );
@@ -296,7 +403,10 @@
     <div class="rv-body">
       <div class="rv-main">
         <div class="rv-waveform">
-          <WaveformView bind:this={waveformView} bind:addMode />
+          <WaveformView bind:this={waveformView} bind:addMode bind:addStartSec />
+        </div>
+        <div class="rv-spectrogram">
+          <SpectrogramView bind:addMode bind:addStartSec />
         </div>
 
         <div class="rv-controls" role="toolbar" aria-label="Review controls">
@@ -308,6 +418,22 @@
                 {currentSeg.start.toFixed(3)}–{currentSeg.end.toFixed(3)}s
                 ({formatMs(currentSeg.duration_ms)})
               </span>
+            {/if}
+            {#if cond && cond.presentationOrder === "blocked"}
+              <span class="lbl" style="margin-left:auto;">Reps</span>
+              <input
+                class="inp"
+                type="number"
+                min="1"
+                step="1"
+                style="width:4rem;"
+                value={cond.expectedRepsPerStimulus}
+                oninput={(e) => {
+                  const v = parseInt((e.currentTarget as HTMLInputElement).value, 10);
+                  if (Number.isFinite(v) && v >= 1) setExpectedReps(v);
+                }}
+                title="How many times the speaker was asked to say each word. Changing it recomputes the automatic labels; labels you set yourself are kept."
+              />
             {/if}
             {#if isPlaying}
               <span class="rv-playing" role="status" aria-label="playing">▶ playing</span>
@@ -328,7 +454,7 @@
                   : "Type label…"}
                 oninput={onLabelInput}
                 onkeydown={onLabelKeyDown}
-                onfocus={onLabelInput}
+                onfocus={onLabelFocus}
                 onblur={onLabelBlur}
                 oncontextmenu={onTokenContextMenu}
                 autocomplete="off"
@@ -363,9 +489,6 @@
                 ⚠ not in list
               </span>
             {/if}
-            {#if currentSeg && currentSeg.label_source === "anchor"}
-              <span class="rv-anchor" title="user-anchored">📌 anchored</span>
-            {/if}
           </div>
 
           <div class="rv-row">
@@ -373,7 +496,7 @@
               type="button"
               class="btn"
               aria-label="Play current segment (Tab)"
-              onclick={playCurrent}>▶ Play (Tab)</button
+              onclick={playCurrent}>▶ Play (Space)</button
             >
             <button
               type="button"
@@ -428,9 +551,9 @@
           </div>
 
           <div class="rv-hint">
-            Tab=play · Enter=accept · R=reject · S=skip · ←/→=prev/next ·
-            A=add-token · Esc=cancel · Scroll=zoom · Shift+drag=pan ·
-            right-click label=clear anchor
+            Space/Tab=play · Enter=accept · R=reject · S=skip · ←/→=prev/next
+            · A=add token · L=edit label · Esc=cancel · Scroll=zoom ·
+            Shift+drag=pan · right-click label=revert to automatic
           </div>
         </div>
       </div>
@@ -468,12 +591,24 @@
   }
 
   .rv-waveform {
-    flex: 0 0 360px;
+    flex: 1 1 0;
+    min-height: 140px;
     background: #1e1f23;
     border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .rv-spectrogram {
+    flex: 1 1 0;
+    min-height: 140px;
+    background: #12131a;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
   }
 
   .rv-controls {
+    /* Never shrinks, never scrolls off — always visible at the bottom. */
+    flex: 0 0 auto;
     padding: 10px 12px;
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -543,11 +678,6 @@
 
   .rv-warn {
     color: var(--warn);
-    font-size: 12px;
-  }
-
-  .rv-anchor {
-    color: var(--accent-bright);
     font-size: 12px;
   }
 

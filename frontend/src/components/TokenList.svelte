@@ -10,12 +10,27 @@
   // Re-evaluates whenever any field on the active condition changes.
   const cond = $derived(activeCondState());
 
-  function isCurrent(idx: number): boolean {
-    return !!cond && cond.currentTokenIndex === idx;
+  // Svelte action: when `current` toggles to true, scroll this row into
+  // view. `block:"nearest"` is non-scrolling when the row is already in
+  // view, so there's no jitter for currents in the middle of the visible
+  // window. Implemented as an action (not a $effect/querySelector loop)
+  // so it runs only on the row that actually becomes current, with no
+  // global reactivity hooks.
+  function autoScrollWhenCurrent(node: HTMLElement, current: boolean) {
+    if (current) {
+      node.scrollIntoView({ block: "nearest" });
+    }
+    return {
+      update(nowCurrent: boolean) {
+        if (nowCurrent) {
+          node.scrollIntoView({ block: "nearest" });
+        }
+      },
+    };
   }
 
-  function isAnchored(seg: Segment): boolean {
-    return seg.label_source === "anchor";
+  function isCurrent(idx: number): boolean {
+    return !!cond && cond.currentTokenIndex === idx;
   }
 
   function rowFlash(wordIndex: number): boolean {
@@ -70,6 +85,7 @@
           class:accepted={seg.status === "accepted"}
           class:noise={seg.segment_type === "short_noise" || seg.segment_type === "crosstalk"}
           class:intro={seg.segment_type === "intro" || seg.status === "intro"}
+          use:autoScrollWhenCurrent={isCurrent(i)}
         >
           <button
             type="button"
@@ -85,15 +101,6 @@
                 </span>
               {:else}
                 <span class="tl-empty">—</span>
-              {/if}
-              {#if isAnchored(seg)}
-                <span
-                  class="tl-anchor-badge"
-                  title="user-anchored"
-                  aria-label="anchored label"
-                >
-                  📌
-                </span>
               {/if}
               {#if seg.assigned_name && cond.stimulusList.length > 0 && !cond.stimulusList.includes(seg.assigned_name)}
                 <span
@@ -224,11 +231,6 @@
   .tl-empty {
     color: var(--text-dim);
     font-style: italic;
-  }
-
-  .tl-anchor-badge {
-    font-size: 10px;
-    opacity: 0.85;
   }
 
   .tl-warn {
