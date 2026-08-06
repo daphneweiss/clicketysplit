@@ -9,7 +9,7 @@ the extra; calling code is expected to check :meth:`is_available` first
 from __future__ import annotations
 
 from math import gcd
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -33,7 +33,7 @@ class WebRTCDetector:
     """Frame-based VAD with energy-envelope boundary refinement."""
 
     name: str = "webrtc"
-    requires_extras: list[str] = ["webrtc"]
+    requires_extras: ClassVar[list[str]] = ["webrtc"]
 
     @classmethod
     def is_available(cls) -> bool:

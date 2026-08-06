@@ -1,19 +1,20 @@
 """Opt-in Praat TextGrid export, gated by the ``[praat]`` extra.
 
-Three tiers per :doc:`/_design/05_EXPORT.md`:
+Three tiers:
 
 1. ``tokens`` — interval tier over exported word tokens; label is ``assigned_name``.
 2. ``all_segments`` — interval tier over every segment; label is ``segment_type``.
 3. ``file_boundaries`` — point tier marking offsets between source recordings.
 
 The TextGrid sits at the condition root (alongside ``proposed_segments.json``),
-NOT inside ``tokens/`` — per CONTRACT_NOTES C2.
+NOT inside ``tokens/``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING
 
 try:
     import parselmouth  # type: ignore[import-not-found]

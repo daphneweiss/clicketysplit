@@ -1,7 +1,7 @@
 """Optional ``noisereduce`` wrapper.
 
 Spectral-gating noise reduction lifted 1:1 from the legacy pipeline's
-``reduce_background_noise`` (see ``_reference/legacy_pipeline/segment_recording.py``).
+``reduce_background_noise`` from the original lab pipeline.
 The noise profile is estimated from the quietest ``noise_floor_fraction`` of
 short frames (legacy hardcoded 0.2), and ``noisereduce.reduce_noise`` is then
 called in stationary mode against that profile.

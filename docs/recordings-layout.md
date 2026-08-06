@@ -4,7 +4,7 @@ clicketysplit's discovery scan is flexible. It accepts two layouts for a
 speaker's recordings and gracefully handles missing condition folders.
 
 The source of truth for discovery rules is
-`_design/02_CONFIG_AND_DISCOVERY.md` §Discovery.
+the discovery code in `src/clicketysplit/discovery.py`.
 
 ## The standard layout: per-condition subdirs
 

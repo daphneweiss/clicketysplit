@@ -1,6 +1,6 @@
 """token_manifest.json builder and atomic writer.
 
-Schema matches :doc:`/_design/05_EXPORT.md` § ``token_manifest.json``.
+Schema documented in docs/exports.md.
 ``exported_at`` is ISO-8601 UTC.
 """
 
@@ -9,19 +9,19 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .tokens import TokenInfo
-
 
 SCHEMA_VERSION = 1
 
 
 def _utc_now_iso() -> str:
     # ISO-8601 with a literal trailing 'Z' (no '+00:00') matches the schema
-    # example in 05_EXPORT.md.
+    # example in docs/exports.md.
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

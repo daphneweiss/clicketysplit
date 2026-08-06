@@ -1,6 +1,6 @@
 """Export engine: WAV tokens, manifest, CSV, optional TextGrid.
 
-Top-level public API. See :doc:`/_design/05_EXPORT.md` for the contract.
+Top-level public API. The export schema is documented in docs/exports.md.
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ from .tokens import ExportResult, TokenInfo, export_tokens, slugify_label
 
 __all__ = [
     "CSV_HEADER",
-    "ExportResult",
     "HAS_PARSELMOUTH",
     "SCHEMA_VERSION",
+    "ExportResult",
     "TokenInfo",
     "build_manifest",
     "export_tokens",

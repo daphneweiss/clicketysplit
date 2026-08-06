@@ -1,18 +1,17 @@
 """tokens.csv writer (UTF-8, RFC-4180-quoted).
 
 Header is stable across schema versions; new columns are appended, never
-inserted or reordered. See :doc:`/_design/05_EXPORT.md` § ``tokens.csv schema``.
+inserted or reordered.
 """
 
 from __future__ import annotations
 
 import csv
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from .tokens import TokenInfo
-
 
 CSV_HEADER: tuple[str, ...] = (
     "speaker_id",

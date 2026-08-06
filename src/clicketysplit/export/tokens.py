@@ -1,6 +1,6 @@
 """WAV-token slicing, fade, naming, and atomic-write export.
 
-The selection rule (see :doc:`/_design/05_EXPORT.md` and CONTRACT_NOTES C4) is
+The selection rule is
 deliberately strict: a segment is exported iff it is a word, has
 ``status == "accepted"``, and carries a non-empty ``assigned_name``. Every
 other segment is counted into a typed ``skipped_*`` bucket so the frontend can
@@ -12,9 +12,10 @@ from __future__ import annotations
 import os
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -117,8 +118,8 @@ def export_tokens(
     tokens_dir = output_dir / "tokens"
     tokens_dir.mkdir(parents=True, exist_ok=True)
 
-    pad_samples = int(round(pad_ms * sr / 1000))
-    fade_samples = int(round(fade_ms * sr / 1000))
+    pad_samples = round(pad_ms * sr / 1000)
+    fade_samples = round(fade_ms * sr / 1000)
     n_samples = audio.shape[0]
     ext = audio_format.lower()
 
@@ -136,8 +137,8 @@ def export_tokens(
             result.skipped_unnamed += 1
             continue
 
-        start_sample_raw = int(round(seg.start * sr))
-        end_sample_raw = int(round(seg.end * sr))
+        start_sample_raw = round(seg.start * sr)
+        end_sample_raw = round(seg.end * sr)
         padded_start = max(0, start_sample_raw - pad_samples)
         padded_end = min(n_samples, end_sample_raw + pad_samples)
         if padded_end <= padded_start:

@@ -2,7 +2,7 @@
 // component (WaveformView.svelte) owns the canvas, mouse handlers, and
 // per-buffer cache; this module exposes the math.
 //
-// Per 06_FRONTEND.md: split canvas drawing from event handling so the
+// Canvas drawing is split from event handling so the
 // drawing layer can be unit-tested and replaced. Spectrogram is deferred
 // to a later task; this v1 ships waveform-only rendering.
 

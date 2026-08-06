@@ -8,7 +8,7 @@ The Setup Wizard writes this file for you. You can also edit it by hand —
 it's plain JSON, validated by pydantic v2 on load.
 
 The source of truth for this schema is
-`_design/02_CONFIG_AND_DISCOVERY.md` in the repo.
+the pydantic models in `src/clicketysplit/config.py`.
 
 ## Top-level fields
 

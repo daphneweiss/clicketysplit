@@ -5,7 +5,7 @@ always available; the other two are optional extras. You pick which one to
 use in the Setup Wizard or by editing `clicketysplit.json`'s
 `detection.backend`.
 
-See `_design/03_AUDIO_AND_DETECTION.md` for the underlying algorithms.
+The implementation lives in `src/clicketysplit/detection/`.
 
 ## Which detector should I use?
 

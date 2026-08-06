@@ -154,7 +154,7 @@ def save_audio(
     fmt_lower = format.lower()
     if fmt_lower not in {"wav", "flac"}:
         # MP3 encoding is finicky, ffmpeg-dependent, and lossy export is a bad
-        # default for a token corpus — see _design/03_AUDIO_AND_DETECTION.md.
+        # default for a token corpus.
         raise ValueError(
             f"save_audio only supports 'wav' or 'flac' (got {format!r}). "
             f"Lossy export is not supported."
@@ -176,7 +176,7 @@ def concatenate(audio_paths: list[Path] | list[str], silence_sec: float = 0.5) -
     paths: list[Path] = [Path(p) for p in audio_paths]
 
     first_audio, sr_ref = load_audio(paths[0])
-    silence = np.zeros(int(round(silence_sec * sr_ref)), dtype=np.float32)
+    silence = np.zeros(round(silence_sec * sr_ref), dtype=np.float32)
 
     parts: list[NDArray[np.float32]] = [first_audio]
     boundaries: list[FileBoundary] = [

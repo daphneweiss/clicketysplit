@@ -11,7 +11,7 @@ reuse it (matches the legacy ``_silero_model`` global).
 from __future__ import annotations
 
 from math import gcd
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -50,7 +50,7 @@ class SileroDetector:
     """ONNX Silero VAD. 16 kHz inference, original-rate boundary refinement."""
 
     name: str = "silero"
-    requires_extras: list[str] = ["silero"]
+    requires_extras: ClassVar[list[str]] = ["silero"]
 
     @classmethod
     def is_available(cls) -> bool:

@@ -4,7 +4,7 @@ For every export, clicketysplit writes one WAV (or FLAC) per selected token
 plus a JSON manifest and a CSV. A Praat TextGrid is opt-in via the
 `export.produce_textgrid` config flag.
 
-The source of truth for this schema is `_design/05_EXPORT.md` in the repo.
+The source of truth for this schema is the export code in `src/clicketysplit/export/`.
 
 ## Output directory layout
 
