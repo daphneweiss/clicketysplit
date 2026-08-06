@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node -e \"require('fs').writeFileSync('../src/clicketysplit/server/static/.gitkeep','')\"",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },
