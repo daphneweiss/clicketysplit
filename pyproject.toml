@@ -9,7 +9,7 @@ description = "A browser-based tool for segmenting and exporting word tokens fro
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "Daphne Weiss", email = "daphnerweiss@gmail.com" }]
+authors = [{ name = "Daphne Weiss" }]
 keywords = ["audio", "segmentation", "phonetics", "speech", "psycholinguistics"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -31,22 +31,29 @@ dependencies = [
   "soundfile>=0.12",       # WAV/FLAC/OGG read+write
   "pydantic>=2.5",         # config schema validation
   "matplotlib>=3.7",       # overview plot for sanity-checks
+  # Silero VAD is not optional: it is the detector the boundary refinement
+  # and duration thresholds were tuned against. The bundled energy detector
+  # over-segments real speech badly enough that shipping it as the default
+  # would misrepresent the tool.
+  "silero-vad>=5.0",
+  "onnxruntime>=1.16",
 ]
 
 [project.optional-dependencies]
-silero  = ["silero-vad>=5.0", "onnxruntime>=1.16"]
 webrtc  = ["webrtcvad>=2.0.10"]
 denoise = ["noisereduce>=3.0"]
 mp3     = ["pydub>=0.25"]           # also requires ffmpeg on PATH (system)
 praat   = ["praat-parselmouth>=0.4"]
 all = [
-  "clicketysplit[silero,webrtc,denoise,mp3,praat]",
+  "clicketysplit[webrtc,denoise,mp3,praat]",
 ]
 dev = [
   "pytest>=7.4",
   "pytest-cov",
-  "ruff",
-  "mypy",
+  # Pinned: an unpinned linter means CI breaks whenever ruff/mypy ship new
+  # default rules, with no code change on our side.
+  "ruff>=0.16,<0.17",
+  "mypy>=2.3,<2.4",
   "mkdocs>=1.5",
   "mkdocs-material>=9.5",
 ]
@@ -78,6 +85,22 @@ packages = ["src/clicketysplit"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+
+# Audio/DSP libraries that ship no type stubs. Everything of ours that
+# wraps them is still checked; only the library boundary is untyped.
+[[tool.mypy.overrides]]
+module = [
+  "noisereduce.*",
+  "pydub.*",
+  "scipy.*",
+  "silero_vad.*",
+  "soundfile.*",
+  "webrtcvad.*",
+]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

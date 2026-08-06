@@ -42,11 +42,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "demo":
-        exp_path = setup_demo_experiment()  # extracts bundled data to a tmp dir
+        exp_dir = setup_demo_experiment()  # extracts bundled data to a tmp dir
+        # create_app wants the config FILE, not the experiment directory —
+        # passing the dir used to boot an empty wizard.
         return _run(
             host="127.0.0.1",
             port=args.port,
-            experiment=exp_path,
+            experiment=exp_dir / "clicketysplit.json",
             open_browser=True,
         )
 
