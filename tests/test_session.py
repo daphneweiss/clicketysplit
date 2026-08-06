@@ -1,6 +1,6 @@
 """Unit tests for :mod:`clicketysplit.session`.
 
-Per CONTRACT_NOTES C2 the session files live at
+The session files live at
 ``<experiment_dir>/<output_subdir>/.session{,.autosave}.json``. The output
 dir is created on demand. Writes are atomic (tmpfile + ``os.replace``);
 on a happy-path write no ``*.tmp`` is left behind.

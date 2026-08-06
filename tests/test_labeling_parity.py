@@ -60,7 +60,18 @@ def test_vectors_file_schema_version_is_one() -> None:
 )
 def test_auto_label_matches_vector(vec: dict[str, Any]) -> None:
     """For every vector, ``auto_label`` must produce ``expected_labels``."""
-    segments = _word_segments(vec["word_segment_count"])
+    if "segments" in vec:
+        segments = [
+            LabeledSegment(
+                start=s["start"],
+                end=s["end"],
+                duration_ms=round((s["end"] - s["start"]) * 1000, 1),
+                segment_type="word",
+            )
+            for s in vec["segments"]
+        ]
+    else:
+        segments = _word_segments(vec["word_segment_count"])
     anchors = [
         LabelAnchor(
             word_index=a["word_index"],

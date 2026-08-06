@@ -94,7 +94,7 @@ def test_round_trip_save_load(experiment_dir: Path) -> None:
                 presentation_order="cycled",
             )
         ],
-        detection=DetectionConfig(backend="energy", denoise=False),
+        detection=DetectionConfig(backend="silero", denoise=False),
         labeling=LabelingConfig(drop_intro_block=True),
         export=ExportConfig(format="flac", produce_textgrid=True),
     )
@@ -121,14 +121,15 @@ def test_speaker_subdir_defaults_to_id() -> None:
     assert s2.subdir == "custom_dir"
 
 
-def test_presentation_order_defaults_to_random() -> None:
+def test_presentation_order_defaults_to_blocked() -> None:
     c = Condition(name="x", stimulus_list="lists/x.txt")
-    assert c.presentation_order == "random"
+    assert c.presentation_order == "blocked"
 
 
-def test_expected_reps_per_stimulus_defaults_to_three() -> None:
+def test_expected_reps_per_stimulus_defaults_to_two() -> None:
+    # 2 repetitions per word is the legacy stim_pipeline default.
     c = Condition(name="x", stimulus_list="lists/x.txt")
-    assert c.expected_reps_per_stimulus == 3
+    assert c.expected_reps_per_stimulus == 2
 
 
 def test_missing_stimulus_list_raises(experiment_dir: Path) -> None:

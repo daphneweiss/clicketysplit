@@ -1,6 +1,6 @@
 """Shared pytest fixtures for the clicketysplit test suite.
 
-These fixtures mirror the spec in ``_design/07_TESTING_AND_DOCS.md``. They
+Shared fixtures for the test suite. They
 are additive — existing tests bring their own ad-hoc fixtures and continue
 to use them; the helpers here exist for future tests that want the
 documented shape.
@@ -31,7 +31,10 @@ def tiny_audio() -> tuple[NDArray[np.float32], int]:
     """3 second mono 16 kHz audio with 3 word bursts at known offsets.
 
     Bursts are 0.2 s of 440 Hz sine at amplitude 0.5, placed at 0.3 s, 1.2 s,
-    and 2.1 s. Matches ``_design/07_TESTING_AND_DOCS.md`` §Fixtures.
+    and 2.1 s. Synthetic on purpose — used by audio-IO and envelope tests
+    that want exactly-known sample positions. Detection tests want
+    :func:`speech_audio` instead: Silero is trained on speech and correctly
+    ignores sine tones.
     """
     sr = 16000
     audio = np.zeros(sr * 3, dtype=np.float32)
@@ -42,6 +45,19 @@ def tiny_audio() -> tuple[NDArray[np.float32], int]:
             0.5 * np.sin(2 * np.pi * 440 * np.arange(burst_len) / sr)
         ).astype(np.float32)
     return audio, sr
+
+
+@pytest.fixture(scope="session")
+def speech_audio_path() -> Path:
+    """Path to a real-speech WAV: the bundled demo clip.
+
+    Detection tests need actual speech — the whole point of the Silero
+    backend is that it does not fire on synthetic tones. Reusing the demo
+    asset keeps the repo free of a second audio fixture.
+    """
+    from clicketysplit import demo_assets
+
+    return Path(demo_assets.__file__).parent / "demo_real_words.wav"
 
 
 @pytest.fixture
@@ -101,7 +117,7 @@ def make_minimal_config(
         "speakers": speakers,
         "conditions": conditions,
         "detection": {
-            "backend": "energy",
+            "backend": "silero",
             "vad_threshold": 0.5,
             "min_segment_ms": 150,
             "min_silence_ms": 150,
@@ -130,9 +146,7 @@ def make_minimal_config(
 
 
 @pytest.fixture
-def fixture_experiment(
-    tmp_path: Path, tiny_audio: tuple[NDArray[np.float32], int]
-) -> Path:
+def fixture_experiment(tmp_path: Path, speech_audio_path: Path) -> Path:
     """A complete fixture experiment dir for integration / server tests.
 
     Layout::
@@ -143,12 +157,12 @@ def fixture_experiment(
             stimulus_lists/cond_a.txt
             output/
 
-    The stimulus list contains ``apple/banana/cherry`` so it matches the
-    bursts in :func:`tiny_audio`. ``presentation_order`` is ``cycled`` so
-    the implicit anchor labels the first burst as ``apple`` — handy for
-    pipeline tests that want at least one accepted token to export.
+    The recording is the bundled demo clip — real speech, because Silero
+    only fires on real speech. ``presentation_order`` is ``cycled`` so the
+    implicit anchor labels the first token ``apple``, giving pipeline tests
+    at least one accepted token to export.
     """
-    audio, sr = tiny_audio
+    audio, sr = sf.read(str(speech_audio_path), dtype="float32")
     exp = tmp_path / "exp"
     (exp / "recordings" / "spk1" / "cond_a").mkdir(parents=True)
     sf.write(

@@ -11,7 +11,6 @@ import pytest
 
 from clicketysplit.detection import (
     DetectionResult,
-    EnergyDetector,
     LabelAnchor,
     LabeledSegment,
     ProposedSegment,
@@ -24,7 +23,6 @@ from clicketysplit.detection import (
     get_detector,
     refine_boundary,
 )
-
 
 # ---------------------------------------------------------------------------
 # Audio fixtures
@@ -60,19 +58,14 @@ def _two_burst_audio(
 # ---------------------------------------------------------------------------
 
 
-def test_available_detectors_always_includes_energy() -> None:
-    assert "energy" in available_detectors()
+def test_available_detectors_includes_silero() -> None:
+    # Silero is a core dependency, so it is always registered.
+    assert "silero" in available_detectors()
 
 
 def test_get_detector_unknown_raises_keyerror() -> None:
     with pytest.raises(KeyError):
         get_detector("nope")
-
-
-def test_get_detector_energy_returns_instance() -> None:
-    det = get_detector("energy")
-    assert isinstance(det, EnergyDetector)
-    assert det.name == "energy"
 
 
 def test_get_detector_silero_runtime_when_unavailable() -> None:
@@ -91,56 +84,6 @@ def test_get_detector_webrtc_runtime_when_unavailable() -> None:
     else:
         with pytest.raises(RuntimeError, match="webrtc"):
             get_detector("webrtc")
-
-
-# ---------------------------------------------------------------------------
-# Energy detector
-# ---------------------------------------------------------------------------
-
-
-def test_energy_is_available_always_true() -> None:
-    assert EnergyDetector.is_available() is True
-    assert EnergyDetector.requires_extras == []
-
-
-def test_energy_detect_finds_two_bursts() -> None:
-    sr = 16000
-    audio = _two_burst_audio(sr=sr)
-    det = EnergyDetector()
-    result = det.detect(
-        audio, sr, min_segment_ms=150, min_silence_ms=150, silence_margin_ms=25
-    )
-    assert isinstance(result, DetectionResult)
-    assert len(result.segments) >= 2
-    starts = sorted(s.start for s in result.segments)
-    # Each detected start should be within 50 ms of one of the burst starts.
-    expected_starts = [0.3, 1.2]
-    for ex in expected_starts:
-        assert any(abs(st - ex) < 0.05 for st in starts), (
-            f"No segment near burst start {ex}s in {starts}"
-        )
-
-
-def test_energy_analysis_dict_keys() -> None:
-    sr = 16000
-    audio = _two_burst_audio(sr=sr)
-    det = EnergyDetector()
-    result = det.detect(
-        audio, sr, min_segment_ms=150, min_silence_ms=150, silence_margin_ms=25
-    )
-    assert {"times", "energy", "is_speech", "energy_threshold"} <= result.analysis.keys()
-    assert result.analysis["energy"].ndim == 1
-    assert result.analysis["is_speech"].dtype == bool
-
-
-def test_energy_detect_silent_input_returns_no_segments() -> None:
-    sr = 16000
-    audio = np.zeros(sr * 2, dtype=np.float32)
-    det = EnergyDetector()
-    result = det.detect(
-        audio, sr, min_segment_ms=150, min_silence_ms=150, silence_margin_ms=25
-    )
-    assert result.segments == []
 
 
 # ---------------------------------------------------------------------------
@@ -370,9 +313,29 @@ def _word_segments(n: int) -> list[LabeledSegment]:
     ]
 
 
+def _vector_segments(vec: dict[str, Any]) -> list[LabeledSegment]:
+    """Build the vector's word segments.
+
+    Blocked vectors carry explicit real timings under ``segments`` (gap
+    clustering needs them); cycled/random vectors just give a count and get
+    a uniform synthetic stride.
+    """
+    if "segments" in vec:
+        return [
+            LabeledSegment(
+                start=s["start"],
+                end=s["end"],
+                duration_ms=round((s["end"] - s["start"]) * 1000, 1),
+                segment_type="word",
+            )
+            for s in vec["segments"]
+        ]
+    return _word_segments(vec["word_segment_count"])
+
+
 @pytest.mark.parametrize("vec", _load_vectors(), ids=lambda v: v["name"])
 def test_auto_label_vectors(vec: dict[str, Any]) -> None:
-    segs = _word_segments(vec["word_segment_count"])
+    segs = _vector_segments(vec)
     anchors = [
         LabelAnchor(
             word_index=a["word_index"], label=a["label"], source=a["source"]
@@ -417,8 +380,25 @@ def test_auto_label_random_only_anchored_indices_get_label() -> None:
     assert out[0].label_source == ""
 
 
+def _blocked_word_segments(cluster_sizes: list[int]) -> list[LabeledSegment]:
+    """Word segments with blocked gap structure: 0.6 s pauses within a
+    cluster, 2.5 s pauses between clusters — the pacing gap clustering
+    was built for."""
+    out: list[LabeledSegment] = []
+    t = 0.0
+    for size in cluster_sizes:
+        for i in range(size):
+            out.append(
+                LabeledSegment(
+                    start=t, end=t + 0.5, duration_ms=500.0, segment_type="word"
+                )
+            )
+            t += 0.5 + (0.6 if i < size - 1 else 2.5)
+    return out
+
+
 def test_auto_label_empty_anchor_halts_forward_labeling() -> None:
-    segs = _word_segments(9)
+    segs = _blocked_word_segments([3, 3, 3])
     out = auto_label(
         segs,
         ["apple", "banana", "cherry"],

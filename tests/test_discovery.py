@@ -1,6 +1,6 @@
 """Unit tests for :mod:`clicketysplit.discovery`.
 
-The rules under test come from 02_CONFIG_AND_DISCOVERY.md §Discovery. The
+The rules under test are implemented in clicketysplit.discovery. The
 fixtures here build tiny on-disk trees and assert the dataclass output —
 ``scan_recordings`` never reads audio so the WAV files we drop are empty
 stubs created with ``touch``.
@@ -8,6 +8,7 @@ stubs created with ``touch``.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,6 @@ from clicketysplit.discovery import (
     ScannedSpeaker,
     scan_recordings,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,5 +187,5 @@ def test_sort_is_case_insensitive_and_deterministic(tmp_path: Path) -> None:
 
 def test_dataclasses_are_frozen() -> None:
     cond = ScannedCondition(name="x", files=[], n_files=0, total_bytes=0)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         cond.name = "y"  # type: ignore[misc]

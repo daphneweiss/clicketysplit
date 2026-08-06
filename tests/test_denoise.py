@@ -17,7 +17,7 @@ def _noisy_speech(duration_sec: float, sr: int, seed: int = 0) -> np.ndarray:
     profile from quietest frames.
     """
     rng = np.random.default_rng(seed)
-    n = int(round(duration_sec * sr))
+    n = round(duration_sec * sr)
     noise = (0.01 * rng.standard_normal(n)).astype(np.float32)
 
     t = np.arange(n) / sr

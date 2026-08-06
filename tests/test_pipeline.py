@@ -1,9 +1,7 @@
 """Tests for ``clicketysplit.detection.pipeline``.
 
-These exercise the full orchestrator end-to-end on a tiny synthetic
-experiment laid out under ``tmp_path``. The energy backend is used
-throughout because it has no optional deps and produces deterministic
-boundaries for clear tone bursts.
+These exercise the full orchestrator end-to-end on a small experiment laid
+out under ``tmp_path``, using the bundled demo clip as the recording.
 """
 
 from __future__ import annotations
@@ -11,7 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 import soundfile as sf
 
@@ -22,38 +19,28 @@ from clicketysplit.detection.pipeline import (
     detect_for_condition,
 )
 
+# Duration of the bundled demo clip used as the recording fixture.
+DEMO_CLIP_SEC = 23.41
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------
 
 
-def _synth_two_word_recording(path: Path, sr: int = 22050) -> None:
-    """Write a 3-second WAV with two clear ~850 ms tone bursts.
+def _synth_two_word_recording(path: Path) -> None:
+    """Copy the bundled demo clip (real speech) to ``path``.
 
-    The bursts are duration-classified as ``word`` by labeling.py's defaults
-    (min_word_duration_ms=250, max_word_duration_ms=1400).
+    Detection tests need real speech: Silero is trained on it and correctly
+    ignores synthetic tones. The bundled demo asset is ~23 s of massed word
+    repetitions, so it exercises the whole detect → classify → label path.
     """
-    duration = 3.0
-    n = int(sr * duration)
-    audio = np.zeros(n, dtype=np.float32)
+    from clicketysplit import demo_assets
 
-    def burst(start_sec: float, end_sec: float, freq: float) -> None:
-        i0 = int(start_sec * sr)
-        i1 = int(end_sec * sr)
-        t = np.arange(i0, i1) / sr
-        audio[i0:i1] += (0.5 * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
-
-    burst(0.4, 1.2, 220.0)
-    burst(1.8, 2.6, 330.0)
-
-    rng = np.random.default_rng(0)
-    audio = (audio + 0.001 * rng.standard_normal(n).astype(np.float32)).astype(
-        np.float32
-    )
-
+    src = Path(demo_assets.__file__).parent / "demo_real_words.wav"
+    audio, real_sr = sf.read(str(src), dtype="float32")
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), audio, sr, subtype="FLOAT")
+    sf.write(str(path), audio, real_sr, subtype="FLOAT")
 
 
 def _build_experiment(
@@ -101,7 +88,7 @@ def _build_experiment(
             }
         ],
         "detection": {
-            "backend": "energy",
+            "backend": "silero",
             "vad_threshold": 0.5,
             "min_segment_ms": 150,
             "min_silence_ms": 150,
@@ -148,8 +135,8 @@ def test_detect_for_condition_happy_path_random(experiment_dir: Path) -> None:
     assert result.proposed_segments_path == expected_json
     assert result.overview_plot_path == expected_png
     assert result.denoised_audio_path is None  # denoise=False
-    assert result.audio_duration_sec == pytest.approx(3.0, abs=0.05)
-    assert result.sample_rate == 22050
+    assert result.audio_duration_sec == pytest.approx(DEMO_CLIP_SEC, abs=0.05)
+    assert result.sample_rate == 16000
     assert result.segment_count >= 1
     assert result.word_segment_count >= 1
 
@@ -161,7 +148,7 @@ def test_proposed_segments_json_shape(experiment_dir: Path) -> None:
     result = detect_for_condition(cfg, "speaker_01", "cond_a")
     data = json.loads(result.proposed_segments_path.read_text(encoding="utf-8"))
 
-    # Required top-level keys per 03_AUDIO_AND_DETECTION.md schema.
+    # Required top-level keys of the proposed_segments.json schema.
     assert data["schema_version"] == 1
     assert data["speaker_id"] == "speaker_01"
     assert data["condition"] == "cond_a"
@@ -170,10 +157,10 @@ def test_proposed_segments_json_shape(experiment_dir: Path) -> None:
     # Paths inside the JSON are RELATIVE to the experiment root.
     assert src["path"] == "recordings/speaker_01/cond_a/take1.wav"
     assert src["offset_sec"] == pytest.approx(0.0)
-    assert src["duration_sec"] == pytest.approx(3.0, abs=0.05)
+    assert src["duration_sec"] == pytest.approx(DEMO_CLIP_SEC, abs=0.05)
     assert "audio_duration_sec" in data
-    assert data["sample_rate"] == 22050
-    assert data["detector"] == "energy"
+    assert data["sample_rate"] == 16000
+    assert data["detector"] == "silero"
     assert isinstance(data["segments"], list)
     assert data["presentation_order"] == "random"
     assert data["label_anchors"] == []  # random → no implicit anchor
@@ -273,4 +260,4 @@ def test_flat_layout_audio_files_are_used(experiment_dir: Path) -> None:
 
     cfg = load_config(config_path)
     result = detect_for_condition(cfg, "speaker_01", "cond_a")
-    assert result.audio_duration_sec == pytest.approx(3.0, abs=0.05)
+    assert result.audio_duration_sec == pytest.approx(DEMO_CLIP_SEC, abs=0.05)

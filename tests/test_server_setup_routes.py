@@ -3,7 +3,7 @@
 Covers ``/api/discover``, ``POST /api/config`` (wizard write — NOT
 ``/api/config/load``), GET/POST ``/api/session``, and
 ``/api/resolve_browse``. Each test creates a fresh ``create_app`` so
-no module-level Flask state leaks (CONTRACT_NOTES C1).
+no module-level Flask state leaks.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import pytest
 from flask.testing import FlaskClient
 
 from clicketysplit.server import create_app
-
 
 # ---------------------------------------------------------------------------
 # Helpers

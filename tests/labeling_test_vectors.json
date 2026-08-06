@@ -1,77 +1,99 @@
 {
   "schema_version": 1,
-  "_doc": "Shared Python/TS test vectors for the auto_label forward-walk algorithm. See _design/03_AUDIO_AND_DETECTION.md.",
+  "_doc": "Shared Python/TS test vectors for auto_label. Each vector supplies either 'segments' (explicit start/end seconds — REQUIRED for blocked vectors, because blocked labeling clusters on real inter-token gaps) or 'word_segment_count' (synthetic uniform 1 s stride — fine for cycled/random, whose walks ignore timing). The blocked timings are lifted from a real recording (speaker f3, filler_word, segmented by the original stim_pipeline tool) so gap clustering is exercised on the pacing it was built for. expected_labels is the settled algorithm's own output — this file pins Python === TypeScript, it is not a claim about label correctness.",
   "vectors": [
     {
-      "name": "blocked-k3-phase1",
-      "_note": "03 doc worked example phase 1: only the implicit anchor at index 0.",
+      "name": "blocked-real-gaps",
+      "_note": "Real f3 timings, implicit anchor only. Output matches the original tool's labels on this exact slice (see experiment/f3/filler_word).",
       "presentation_order": "blocked",
-      "expected_reps_per_stimulus": 3,
-      "stimulus_list": ["apple", "banana", "cherry"],
-      "word_segment_count": 9,
-      "anchors": [
-        {"word_index": 0, "label": "apple", "source": "initial"}
+      "expected_reps_per_stimulus": 2,
+      "stimulus_list": ["accordian", "america", "annoying", "bakery", "blueberry", "bullying", "camera"],
+      "segments": [
+        {"start": 81.2278, "end": 82.0486},
+        {"start": 83.3056, "end": 84.1588},
+        {"start": 85.76, "end": 86.496},
+        {"start": 87.8827, "end": 88.6087},
+        {"start": 90.3995, "end": 91.2951},
+        {"start": 92.9163, "end": 93.727},
+        {"start": 95.2659, "end": 96.0642},
+        {"start": 97.4909, "end": 98.2717},
+        {"start": 99.6809, "end": 100.2547},
+        {"start": 102.2501, "end": 102.7515},
+        {"start": 104.5224, "end": 105.408},
+        {"start": 106.6875, "end": 107.7427}
       ],
-      "expected_labels": [
-        "apple", "apple", "apple",
-        "banana", "banana", "banana",
-        "cherry", "cherry", "cherry"
-      ]
+      "anchors": [],
+      "expected_labels": ["accordian", "accordian", "america", "america", "annoying", "bakery", "blueberry", "blueberry", "blueberry", "bullying", "camera", "camera"]
     },
     {
-      "name": "blocked-k3-phase2-user-edit",
-      "_note": "03 doc worked example phase 2: user re-anchors index 4 to cherry; the trailing region wraps back to apple after K=3 cherries.",
+      "name": "blocked-real-gaps-user-anchor",
+      "_note": "A user anchor re-pins its whole cluster's stimulus; later clusters continue forward from there and run blank past the end of the list.",
       "presentation_order": "blocked",
-      "expected_reps_per_stimulus": 3,
-      "stimulus_list": ["apple", "banana", "cherry"],
-      "word_segment_count": 9,
-      "anchors": [
-        {"word_index": 0, "label": "apple", "source": "initial"},
-        {"word_index": 4, "label": "cherry", "source": "user"}
+      "expected_reps_per_stimulus": 2,
+      "stimulus_list": ["accordian", "america", "annoying", "bakery", "blueberry", "bullying", "camera"],
+      "segments": [
+        {"start": 81.2278, "end": 82.0486},
+        {"start": 83.3056, "end": 84.1588},
+        {"start": 85.76, "end": 86.496},
+        {"start": 87.8827, "end": 88.6087},
+        {"start": 90.3995, "end": 91.2951},
+        {"start": 92.9163, "end": 93.727},
+        {"start": 95.2659, "end": 96.0642},
+        {"start": 97.4909, "end": 98.2717},
+        {"start": 99.6809, "end": 100.2547},
+        {"start": 102.2501, "end": 102.7515},
+        {"start": 104.5224, "end": 105.408},
+        {"start": 106.6875, "end": 107.7427}
       ],
-      "expected_labels": [
-        "apple", "apple", "apple", "apple",
-        "cherry", "cherry", "cherry",
-        "apple", "apple"
-      ]
+      "anchors": [{"word_index": 4, "label": "bakery", "source": "user"}],
+      "expected_labels": ["accordian", "accordian", "america", "america", "bakery", "blueberry", "bullying", "bullying", "bullying", "camera", "", ""]
     },
     {
-      "name": "blocked-k3-phase3-empty-anchor",
-      "_note": "03 doc worked example phase 3: an empty-label anchor halts forward labeling.",
+      "name": "blocked-real-gaps-empty-anchor-halt",
+      "_note": "An empty-label anchor blanks every word from its index through to the next anchor (here: to the end).",
       "presentation_order": "blocked",
-      "expected_reps_per_stimulus": 3,
-      "stimulus_list": ["apple", "banana", "cherry"],
-      "word_segment_count": 9,
-      "anchors": [
-        {"word_index": 0, "label": "apple", "source": "initial"},
-        {"word_index": 4, "label": "cherry", "source": "user"},
-        {"word_index": 7, "label": "", "source": "user"}
+      "expected_reps_per_stimulus": 2,
+      "stimulus_list": ["accordian", "america", "annoying", "bakery", "blueberry", "bullying", "camera"],
+      "segments": [
+        {"start": 81.2278, "end": 82.0486},
+        {"start": 83.3056, "end": 84.1588},
+        {"start": 85.76, "end": 86.496},
+        {"start": 87.8827, "end": 88.6087},
+        {"start": 90.3995, "end": 91.2951},
+        {"start": 92.9163, "end": 93.727},
+        {"start": 95.2659, "end": 96.0642},
+        {"start": 97.4909, "end": 98.2717},
+        {"start": 99.6809, "end": 100.2547},
+        {"start": 102.2501, "end": 102.7515},
+        {"start": 104.5224, "end": 105.408},
+        {"start": 106.6875, "end": 107.7427}
       ],
-      "expected_labels": [
-        "apple", "apple", "apple", "apple",
-        "cherry", "cherry", "cherry",
-        "", ""
-      ]
+      "anchors": [{"word_index": 9, "label": "", "source": "user"}],
+      "expected_labels": ["accordian", "accordian", "america", "america", "annoying", "bakery", "blueberry", "blueberry", "blueberry", "", "", ""]
+    },
+    {
+      "name": "blocked-kchunk-fallback",
+      "_note": "Fewer inter-token gaps than needed splits: falls back to fixed k-sized chunks (k = expected_reps_per_stimulus). Uniform synthetic timings are fine here — the fallback ignores gap sizes.",
+      "presentation_order": "blocked",
+      "expected_reps_per_stimulus": 2,
+      "stimulus_list": ["a", "b", "c", "d", "e"],
+      "word_segment_count": 3,
+      "anchors": [],
+      "expected_labels": ["a", "a", "b"]
     },
     {
       "name": "cycled-phase1",
-      "_note": "03 doc worked example for cycled with just the implicit anchor.",
+      "_note": "Cycled (spaced) with just the implicit anchor: stride-1 walk through the list.",
       "presentation_order": "cycled",
       "expected_reps_per_stimulus": 3,
       "stimulus_list": ["apple", "banana", "cherry"],
       "word_segment_count": 8,
-      "anchors": [
-        {"word_index": 0, "label": "apple", "source": "initial"}
-      ],
-      "expected_labels": [
-        "apple", "banana", "cherry",
-        "apple", "banana", "cherry",
-        "apple", "banana"
-      ]
+      "anchors": [{"word_index": 0, "label": "apple", "source": "initial"}],
+      "expected_labels": ["apple", "banana", "cherry", "apple", "banana", "cherry", "apple", "banana"]
     },
     {
       "name": "cycled-phase2-user-edit",
-      "_note": "03 doc worked example for cycled after the user re-anchors index 1 to cherry.",
+      "_note": "Cycled after the user re-anchors index 1 to cherry: hold between anchors, stride after the last one.",
       "presentation_order": "cycled",
       "expected_reps_per_stimulus": 3,
       "stimulus_list": ["apple", "banana", "cherry"],
@@ -80,10 +102,7 @@
         {"word_index": 0, "label": "apple", "source": "initial"},
         {"word_index": 1, "label": "cherry", "source": "user"}
       ],
-      "expected_labels": [
-        "apple", "cherry", "apple", "banana",
-        "cherry", "apple", "banana", "cherry"
-      ]
+      "expected_labels": ["apple", "cherry", "apple", "banana", "cherry", "apple", "banana", "cherry"]
     },
     {
       "name": "random-no-auto-label",
@@ -92,27 +111,8 @@
       "expected_reps_per_stimulus": 3,
       "stimulus_list": ["apple", "banana", "cherry"],
       "word_segment_count": 5,
-      "anchors": [
-        {"word_index": 2, "label": "cherry", "source": "user"}
-      ],
+      "anchors": [{"word_index": 2, "label": "cherry", "source": "user"}],
       "expected_labels": ["", "", "cherry", "", ""]
-    },
-    {
-      "name": "blocked-wraparound",
-      "_note": "Speaker did an extra rep past the end of the stimulus list; blocked walk wraps back to stimulus_list[0] (per 03 doc Notes on the algorithm).",
-      "presentation_order": "blocked",
-      "expected_reps_per_stimulus": 3,
-      "stimulus_list": ["apple", "banana", "cherry"],
-      "word_segment_count": 11,
-      "anchors": [
-        {"word_index": 0, "label": "apple", "source": "initial"}
-      ],
-      "expected_labels": [
-        "apple", "apple", "apple",
-        "banana", "banana", "banana",
-        "cherry", "cherry", "cherry",
-        "apple", "apple"
-      ]
     }
   ]
 }

@@ -4,7 +4,7 @@ Exercises the app factory, every non-task-8 route, the structured-error
 contract, and the SPA static fallback. Uses Flask's test client; spins up
 a fresh experiment per test under ``tmp_path``.
 
-CONTRACT_NOTES C1: each test creates its own app via :func:`create_app`,
+Each test creates its own app via :func:`create_app`,
 so no module-level Flask state leaks between tests.
 """
 
@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 import soundfile as sf
 from flask import Flask
@@ -23,38 +22,24 @@ from flask.testing import FlaskClient
 from clicketysplit import __version__
 from clicketysplit.server import create_app
 
-
 # ---------------------------------------------------------------------------
 # Fixture: tiny synthetic experiment + loaded app
 # ---------------------------------------------------------------------------
 
 
-def _synth_two_word_recording(path: Path, sr: int = 22050) -> None:
-    """Write a 3-second WAV with two ~800 ms tone bursts.
+def _synth_two_word_recording(path: Path) -> None:
+    """Copy the bundled demo clip (real speech) to ``path``.
 
-    Mirrors the fixture in ``test_pipeline.py``; the energy detector
-    classifies both bursts as ``word`` under the default duration limits.
+    Detection tests need real speech: Silero is trained on it and correctly
+    ignores synthetic tones. The bundled demo asset is ~23 s of massed word
+    repetitions, so it exercises the whole detect -> classify -> label path.
     """
-    duration = 3.0
-    n = int(sr * duration)
-    audio = np.zeros(n, dtype=np.float32)
+    from clicketysplit import demo_assets
 
-    def burst(start_sec: float, end_sec: float, freq: float) -> None:
-        i0 = int(start_sec * sr)
-        i1 = int(end_sec * sr)
-        t = np.arange(i0, i1) / sr
-        audio[i0:i1] += (0.5 * np.sin(2.0 * np.pi * freq * t)).astype(np.float32)
-
-    burst(0.4, 1.2, 220.0)
-    burst(1.8, 2.6, 330.0)
-
-    rng = np.random.default_rng(0)
-    audio = (audio + 0.001 * rng.standard_normal(n).astype(np.float32)).astype(
-        np.float32
-    )
+    src = Path(demo_assets.__file__).parent / "demo_real_words.wav"
+    audio, real_sr = sf.read(str(src), dtype="float32")
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), audio, sr, subtype="FLOAT")
-
+    sf.write(str(path), audio, real_sr, subtype="FLOAT")
 
 def _write_experiment(root: Path, *, denoise: bool = False) -> Path:
     """Create a minimal experiment under ``root`` and return the config path."""
@@ -83,7 +68,7 @@ def _write_experiment(root: Path, *, denoise: bool = False) -> Path:
             }
         ],
         "detection": {
-            "backend": "energy",
+            "backend": "silero",
             "vad_threshold": 0.5,
             "min_segment_ms": 150,
             "min_silence_ms": 150,
@@ -173,14 +158,14 @@ def test_version(client_unloaded: FlaskClient) -> None:
     assert data["version"] == __version__
     assert isinstance(data["supported_audio_formats"], list)
     assert ".wav" in data["supported_audio_formats"]
-    assert "energy" in data["available_detectors"]
+    assert "silero" in data["available_detectors"]
 
 
 def test_capabilities(client_unloaded: FlaskClient) -> None:
     resp = client_unloaded.get("/api/capabilities")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert "energy" in data["detectors"]
+    assert "silero" in data["detectors"]
     assert data["denoise_available"] is True
     assert data["textgrid_available"] is True
     assert ".wav" in data["audio_formats"]
@@ -259,8 +244,8 @@ def test_detect_happy_path(
     assert data["condition"] == "cond_a"
     assert data["n_segments"] >= 1
     assert data["n_words"] >= 1
-    assert data["detector"] == "energy"
-    assert data["audio_duration_sec"] == pytest.approx(3.0, abs=0.1)
+    assert data["detector"] == "silero"
+    assert data["audio_duration_sec"] == pytest.approx(23.41, abs=0.1)
     assert data["overview_png"] == "/api/overview/speaker_01/cond_a"
 
     # On-disk side effects.

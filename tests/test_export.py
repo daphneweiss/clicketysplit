@@ -19,8 +19,8 @@ import soundfile as sf
 
 from clicketysplit.export import (
     CSV_HEADER,
-    ExportResult,
     SCHEMA_VERSION,
+    ExportResult,
     TokenInfo,
     build_manifest,
     export_tokens,
@@ -57,7 +57,7 @@ class _FakeBoundary:
 
 
 def _silence(duration_sec: float, sr: int) -> np.ndarray:
-    return np.zeros(int(round(duration_sec * sr)), dtype=np.float32)
+    return np.zeros(round(duration_sec * sr), dtype=np.float32)
 
 
 def _ramp(n: int) -> np.ndarray:
@@ -69,8 +69,8 @@ def _audio_with_marks(sr: int, total_sec: float, marks: list[tuple[float, float]
     """Build an all-1.0 region for each (start_sec, end_sec) over silence."""
     audio = _silence(total_sec, sr)
     for start_s, end_s in marks:
-        start_i = int(round(start_s * sr))
-        end_i = int(round(end_s * sr))
+        start_i = round(start_s * sr)
+        end_i = round(end_s * sr)
         audio[start_i:end_i] = 1.0
     return audio
 
@@ -123,7 +123,7 @@ def test_export_tokens_happy_path(tmp_path: Path) -> None:
     for token in result.tokens_written:
         data, file_sr = sf.read(str(tokens_dir / token.filename), dtype="float32")
         assert file_sr == sr
-        expected_samples = int(round((token.end_sec - token.start_sec) * sr))
+        expected_samples = round((token.end_sec - token.start_sec) * sr)
         assert data.shape[0] == expected_samples
 
 
@@ -137,8 +137,8 @@ def test_export_tokens_pad_ms_extends_slice(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     result = export_tokens(audio, sr, [seg], out_dir, "spk", pad_ms=20, fade_ms=0)
     token = result.tokens_written[0]
-    pad_samples = int(round(20 * sr / 1000))
-    expected_total = int(round((0.7 - 0.5) * sr)) + 2 * pad_samples
+    pad_samples = round(20 * sr / 1000)
+    expected_total = round((0.7 - 0.5) * sr) + 2 * pad_samples
     data, _ = sf.read(str(out_dir / "tokens" / token.filename), dtype="float32")
     assert data.shape[0] == expected_total
 
@@ -152,10 +152,10 @@ def test_export_tokens_pad_clipped_at_audio_bounds(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "out"
     result = export_tokens(audio, sr, [seg], out_dir, "spk", pad_ms=50, fade_ms=0)
-    pad_samples = int(round(50 * sr / 1000))
+    pad_samples = round(50 * sr / 1000)
     data, _ = sf.read(str(out_dir / "tokens" / result.tokens_written[0].filename), dtype="float32")
     # Left side cannot be padded past 0; only the right pad gets added.
-    expected = int(round(0.2 * sr)) + pad_samples
+    expected = round(0.2 * sr) + pad_samples
     assert data.shape[0] == expected
 
 
@@ -169,7 +169,7 @@ def test_export_tokens_fade_ms_applies_linear_ramp(tmp_path: Path) -> None:
     fade_ms = 5
     result = export_tokens(audio, sr, [seg], out_dir, "spk", pad_ms=0, fade_ms=fade_ms)
     data, _ = sf.read(str(out_dir / "tokens" / result.tokens_written[0].filename), dtype="float32")
-    fade_samples = int(round(fade_ms * sr / 1000))
+    fade_samples = round(fade_ms * sr / 1000)
     mid = len(data) // 2
     # First sample is faded to ~0; middle sample sees the full amplitude.
     assert data[0] < data[mid]

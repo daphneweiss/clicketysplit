@@ -20,7 +20,7 @@ from clicketysplit.audio_io import (
 
 
 def _sine(duration_sec: float, freq_hz: float, sr: int) -> np.ndarray:
-    t = np.arange(int(round(duration_sec * sr))) / sr
+    t = np.arange(round(duration_sec * sr)) / sr
     return (0.5 * np.sin(2.0 * np.pi * freq_hz * t)).astype(np.float32)
 
 
@@ -92,7 +92,7 @@ def test_concatenate_two_files(tmp_path: Path) -> None:
     assert result.audio.ndim == 1
 
     expected_total_sec = 0.3 + 0.1 + 0.3
-    assert result.audio.shape[0] == int(round(expected_total_sec * sr))
+    assert result.audio.shape[0] == round(expected_total_sec * sr)
 
     assert len(result.boundaries) == 2
     b0, b1 = result.boundaries
