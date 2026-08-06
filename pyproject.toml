@@ -87,7 +87,10 @@ line-length = 100
 target-version = "py310"
 
 [tool.mypy]
-python_version = "3.10"
+# Deliberately no python_version pin: mypy then targets whichever
+# interpreter it runs under, which is what the CI matrix wants. Pinning it
+# to 3.10 made mypy read modern numpy stubs (PEP 695 `type` statements)
+# under a 3.10 target and fail with a syntax error.
 
 # Audio/DSP libraries that ship no type stubs. Everything of ours that
 # wraps them is still checked; only the library boundary is untyped.

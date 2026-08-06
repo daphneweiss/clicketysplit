@@ -120,7 +120,9 @@ def test_load_rejects_non_object_json(exp: Path) -> None:
     out_dir = exp / "output"
     out_dir.mkdir()
     (out_dir / ".session.json").write_text("[1, 2, 3]", encoding="utf-8")
-    with pytest.raises(ValueError):
+    # A session file that parses but isn't an object is a type problem, not
+    # a value problem — load_session raises TypeError.
+    with pytest.raises(TypeError):
         load_session(exp)
 
 
